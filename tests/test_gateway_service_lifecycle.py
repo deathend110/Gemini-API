@@ -42,26 +42,58 @@ from gateway.service import GatewayService
 
 
 class FakeGeminiClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        text_result: str = "shared reply",
+        stream_chunks: list[str] | None = None,
+        init_error: Exception | None = None,
+        generate_error: Exception | None = None,
+        stream_error: Exception | None = None,
+        stream_error_after_chunks: int | None = None,
+    ) -> None:
         self.init_calls: list[dict[str, object]] = []
         self.close_calls = 0
         self.generate_calls: list[dict[str, object]] = []
         self.stream_calls: list[dict[str, object]] = []
+        self.text_result = text_result
+        self.stream_chunks = stream_chunks or ["shared ", "stream"]
+        self.init_error = init_error
+        self.generate_error = generate_error
+        self.stream_error = stream_error
+        self.stream_error_after_chunks = stream_error_after_chunks
 
     async def init(self, **kwargs) -> None:
         self.init_calls.append(kwargs)
+        if self.init_error is not None:
+            error = self.init_error
+            self.init_error = None
+            raise error
 
     async def close(self) -> None:
         self.close_calls += 1
 
     async def generate_content(self, **kwargs):
         self.generate_calls.append(kwargs)
-        return SimpleNamespace(text="shared reply")
+        if self.generate_error is not None:
+            error = self.generate_error
+            self.generate_error = None
+            raise error
+        return SimpleNamespace(text=self.text_result)
 
     async def generate_content_stream(self, **kwargs):
         self.stream_calls.append(kwargs)
-        yield "shared "
-        yield "stream"
+        if self.stream_error is not None:
+            error = self.stream_error
+            self.stream_error = None
+            raise error
+        for index, chunk in enumerate(self.stream_chunks, start=1):
+            yield chunk
+            if (
+                self.stream_error_after_chunks is not None
+                and index >= self.stream_error_after_chunks
+            ):
+                raise StubAPIError("stream interrupted")
 
 
 class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
@@ -171,6 +203,192 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_client.close_calls, 0)
         self.assertEqual(len(fake_client.generate_calls), 1)
         self.assertEqual(len(fake_client.stream_calls), 1)
+
+    async def test_generate_text_rebuilds_shared_client_after_timeout(self) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(generate_error=StubTimeoutError("timeout"))
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        text = await service.generate_text(
+            prompt="hello",
+            upstream_model="gemini-3-flash",
+            request=request,
+        )
+
+        self.assertEqual(text, "recovered reply")
+        self.assertEqual(first_client.close_calls, 1)
+        self.assertEqual(len(second_client.init_calls), 1)
+        self.assertEqual(len(first_client.generate_calls), 1)
+        self.assertEqual(len(second_client.generate_calls), 1)
+
+    async def test_generate_stream_rebuilds_shared_client_after_initial_failure(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(stream_error=StubAPIError("stream failed"))
+        second_client = FakeGeminiClient(stream_chunks=["re", "covered"])
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        chunks = [
+            chunk
+            async for chunk in service.generate_stream(
+                prompt="hello",
+                upstream_model="gemini-3-flash",
+                request=request,
+            )
+        ]
+
+        self.assertEqual(chunks, ["re", "covered"])
+        self.assertEqual(first_client.close_calls, 1)
+        self.assertEqual(len(second_client.init_calls), 1)
+        self.assertEqual(len(first_client.stream_calls), 1)
+        self.assertEqual(len(second_client.stream_calls), 1)
+
+    async def test_generate_text_raises_when_rebuilt_client_fails_again(self) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(generate_error=StubGeminiError("first"))
+        second_client = FakeGeminiClient(generate_error=StubAPIError("second"))
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        with self.assertRaises(StubAPIError):
+            await service.generate_text(
+                prompt="hello",
+                upstream_model="gemini-3-flash",
+                request=request,
+            )
+
+        self.assertEqual(first_client.close_calls, 1)
+        self.assertEqual(len(first_client.generate_calls), 1)
+        self.assertEqual(len(second_client.generate_calls), 1)
+
+    async def test_generate_text_closes_rebuilt_client_when_reinit_fails(self) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(generate_error=StubTimeoutError("timeout"))
+        second_client = FakeGeminiClient(init_error=StubAPIError("init failed"))
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        with self.assertRaises(StubAPIError):
+            await service.generate_text(
+                prompt="hello",
+                upstream_model="gemini-3-flash",
+                request=request,
+            )
+
+        self.assertEqual(first_client.close_calls, 1)
+        self.assertEqual(second_client.close_calls, 1)
+
+    async def test_rebuild_keeps_old_client_alive_until_last_holder_releases(self) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient()
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+
+        held_client, held_generation = await service._acquire_shared_client()
+        rebuilt_client, rebuilt_generation = await service._rebuild_shared_client_after_failure(
+            failed_client=held_client,
+            failed_generation=held_generation,
+        )
+
+        self.assertIs(rebuilt_client, second_client)
+        self.assertIs(service._shared_client, second_client)
+        self.assertEqual(first_client.close_calls, 0)
+
+        await service._release_shared_client(rebuilt_generation)
+        self.assertEqual(first_client.close_calls, 0)
+
+        await service._release_shared_client(held_generation)
+        self.assertEqual(first_client.close_calls, 1)
+
+    async def test_generate_text_rebuild_does_not_close_client_held_by_other_request(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient()
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        held_client, held_generation = await service._acquire_shared_client()
+        held_client.generate_error = StubTimeoutError("timeout")
+        request = self.make_request()
+
+        text = await service.generate_text(
+            prompt="hello",
+            upstream_model="gemini-3-flash",
+            request=request,
+        )
+
+        self.assertEqual(text, "recovered reply")
+        self.assertEqual(first_client.close_calls, 0)
+
+        await service._release_shared_client(held_generation)
+        self.assertEqual(first_client.close_calls, 1)
+
+    async def test_shutdown_keeps_retired_client_alive_until_held_request_releases(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient()
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        held_client, held_generation = await service._acquire_shared_client()
+        rebuilt_client, rebuilt_generation = await service._rebuild_shared_client_after_failure(
+            failed_client=held_client,
+            failed_generation=held_generation,
+        )
+
+        self.assertIs(rebuilt_client, second_client)
+
+        await service._release_shared_client(rebuilt_generation)
+        await service.shutdown()
+
+        self.assertEqual(first_client.close_calls, 0)
+        self.assertEqual(second_client.close_calls, 1)
+
+        await service._release_shared_client(held_generation)
+        self.assertEqual(first_client.close_calls, 1)
+
+    async def test_generate_stream_does_not_rebuild_after_partial_output(self) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(
+            stream_chunks=["partial"],
+            stream_error_after_chunks=1,
+        )
+        second_client = FakeGeminiClient(stream_chunks=["recovered"])
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+        chunks: list[str] = []
+
+        with self.assertRaises(StubAPIError):
+            async for chunk in service.generate_stream(
+                prompt="hello",
+                upstream_model="gemini-3-flash",
+                request=request,
+            ):
+                chunks.append(chunk)
+
+        self.assertEqual(chunks, ["partial"])
+        self.assertEqual(first_client.close_calls, 0)
+        self.assertEqual(second_client.init_calls, [])
 
 
 if __name__ == "__main__":

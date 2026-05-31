@@ -71,6 +71,9 @@ class GatewayService:
         }
         self._cached_cookies: dict[str, str] | None = None
         self._shared_client: GeminiClient | None = None
+        self._shared_client_generation = 0
+        self._active_client_refs: dict[int, int] = {}
+        self._retired_clients: dict[int, GeminiClient] = {}
         self._is_warmed_up = False
         self._shared_client_lock = asyncio.Lock()
 
@@ -606,13 +609,32 @@ class GatewayService:
         request: ChatCompletionRequest,
         files: list[Path] | None = None,
     ) -> str:
-        client = await self.get_shared_client()
-        response = await client.generate_content(
-            prompt=prompt,
-            model=upstream_model,
-            files=files,
-        )
-        return response.text
+        client, generation = await self._acquire_shared_client()
+        try:
+            for attempt in range(2):
+                try:
+                    response = await client.generate_content(
+                        prompt=prompt,
+                        model=upstream_model,
+                        files=files,
+                    )
+                    return response.text
+                except Exception as exc:
+                    if attempt == 0 and self._should_rebuild_shared_client(exc):
+                        rebuilt_client, rebuilt_generation = (
+                            await self._rebuild_shared_client_after_failure(
+                                failed_client=client,
+                                failed_generation=generation,
+                            )
+                        )
+                        previous_generation = generation
+                        client = rebuilt_client
+                        generation = rebuilt_generation
+                        await self._release_shared_client(previous_generation)
+                        continue
+                    raise
+        finally:
+            await self._release_shared_client(generation)
 
     async def generate_stream(
         self,
@@ -621,13 +643,39 @@ class GatewayService:
         request: ChatCompletionRequest,
         files: list[Path] | None = None,
     ) -> AsyncGenerator[Any, None]:
-        client = await self.get_shared_client()
-        async for chunk in client.generate_content_stream(
-            prompt=prompt,
-            model=upstream_model,
-            files=files,
-        ):
-            yield chunk
+        client, generation = await self._acquire_shared_client()
+        try:
+            for attempt in range(2):
+                yielded_any_chunk = False
+                try:
+                    async for chunk in client.generate_content_stream(
+                        prompt=prompt,
+                        model=upstream_model,
+                        files=files,
+                    ):
+                        yielded_any_chunk = True
+                        yield chunk
+                    return
+                except Exception as exc:
+                    if (
+                        attempt == 0
+                        and not yielded_any_chunk
+                        and self._should_rebuild_shared_client(exc)
+                    ):
+                        rebuilt_client, rebuilt_generation = (
+                            await self._rebuild_shared_client_after_failure(
+                                failed_client=client,
+                                failed_generation=generation,
+                            )
+                        )
+                        previous_generation = generation
+                        client = rebuilt_client
+                        generation = rebuilt_generation
+                        await self._release_shared_client(previous_generation)
+                        continue
+                    raise
+        finally:
+            await self._release_shared_client(generation)
 
     def _build_client_from_cached_cookies(self) -> GeminiClient:
         from gemini_webapi import GeminiClient
@@ -658,28 +706,21 @@ class GatewayService:
                 return
 
             client = self._shared_client or self._build_client_from_cached_cookies()
-            try:
-                await client.init(
-                    timeout=self.settings.request_timeout,
-                    auto_refresh=True,
-                    auto_close=False,
-                )
-            except Exception:
-                self._shared_client = None
-                self._is_warmed_up = False
-                raise
-
-            self._shared_client = client
-            self._is_warmed_up = True
+            await self._init_shared_client(client)
 
     async def shutdown(self) -> None:
         async with self._shared_client_lock:
             client = self._shared_client
+            generation = self._shared_client_generation
             self._shared_client = None
             self._is_warmed_up = False
+            clients_to_close = self._collect_releasable_retired_clients_locked()
+            current_client_to_close = self._retire_client_locked(generation, client)
+            if current_client_to_close is not None:
+                clients_to_close.append(current_client_to_close)
 
-        if client is not None:
-            await client.close()
+        for current_client in clients_to_close:
+            await current_client.close()
 
     async def get_shared_client(self) -> GeminiClient:
         await self.warmup()
@@ -693,6 +734,139 @@ class GatewayService:
 
     def build_gemini_client(self) -> GeminiClient:
         return self._build_client_from_cached_cookies()
+
+    async def _init_shared_client(self, client: GeminiClient) -> GeminiClient:
+        try:
+            await client.init(
+                timeout=self.settings.request_timeout,
+                auto_refresh=True,
+                auto_close=False,
+            )
+        except Exception:
+            self._shared_client = None
+            self._is_warmed_up = False
+            raise
+
+        self._shared_client_generation += 1
+        self._shared_client = client
+        self._is_warmed_up = True
+        return client
+
+    async def _acquire_shared_client(self) -> tuple[GeminiClient, int]:
+        await self.warmup()
+        async with self._shared_client_lock:
+            client = self._shared_client
+            if client is None:
+                raise GatewayServiceError(
+                    message="Gemini client warmup failed.",
+                    code="upstream_error",
+                    status_code=500,
+                )
+
+            generation = self._shared_client_generation
+            self._active_client_refs[generation] = (
+                self._active_client_refs.get(generation, 0) + 1
+            )
+            return client, generation
+
+    async def _release_shared_client(self, generation: int) -> None:
+        client_to_close: GeminiClient | None = None
+        async with self._shared_client_lock:
+            ref_count = self._active_client_refs.get(generation)
+            if ref_count is None:
+                return
+
+            if ref_count <= 1:
+                self._active_client_refs.pop(generation, None)
+                client_to_close = self._retired_clients.pop(generation, None)
+            else:
+                self._active_client_refs[generation] = ref_count - 1
+
+        if client_to_close is not None:
+            await client_to_close.close()
+
+    async def _rebuild_shared_client_after_failure(
+        self,
+        failed_client: GeminiClient,
+        failed_generation: int,
+    ) -> tuple[GeminiClient, int]:
+        client_to_close: GeminiClient | None = None
+        rebuilt_client_to_close: GeminiClient | None = None
+        rebuild_error: Exception | None = None
+        async with self._shared_client_lock:
+            if (
+                self._shared_client is not None
+                and self._shared_client is not failed_client
+            ):
+                generation = self._shared_client_generation
+                self._active_client_refs[generation] = (
+                    self._active_client_refs.get(generation, 0) + 1
+                )
+                return self._shared_client, generation
+
+            client = self._build_client_from_cached_cookies()
+            try:
+                await self._init_shared_client(client)
+            except Exception as exc:
+                rebuild_error = exc
+                rebuilt_client_to_close = client
+                if self._shared_client is failed_client:
+                    self._shared_client = None
+                    self._is_warmed_up = False
+                client_to_close = self._retire_client_locked(
+                    failed_generation,
+                    failed_client,
+                )
+            else:
+                generation = self._shared_client_generation
+                self._active_client_refs[generation] = (
+                    self._active_client_refs.get(generation, 0) + 1
+                )
+                client_to_close = self._retire_client_locked(
+                    failed_generation,
+                    failed_client,
+                )
+
+        if client_to_close is not None:
+            await client_to_close.close()
+
+        if rebuilt_client_to_close is not None:
+            await rebuilt_client_to_close.close()
+
+        if rebuild_error is not None:
+            raise rebuild_error
+
+        return client, generation
+
+    def _should_rebuild_shared_client(self, exc: Exception) -> bool:
+        return isinstance(exc, (AuthError, TimeoutError, APIError, GeminiError))
+
+    def _retire_client_locked(
+        self,
+        generation: int,
+        client: GeminiClient | None,
+    ) -> GeminiClient | None:
+        if client is None:
+            return None
+
+        if self._active_client_refs.get(generation, 0) > 0:
+            self._retired_clients[generation] = client
+            return None
+
+        self._retired_clients.pop(generation, None)
+        return client
+
+    def _collect_releasable_retired_clients_locked(self) -> list[GeminiClient]:
+        releasable_generations = [
+            generation
+            for generation in self._retired_clients
+            if self._active_client_refs.get(generation, 0) == 0
+        ]
+        clients_to_close = [
+            self._retired_clients.pop(generation)
+            for generation in releasable_generations
+        ]
+        return clients_to_close
 
     def _normalize_exception(self, exc: Exception) -> GatewayServiceError:
         if isinstance(exc, GatewayServiceError):
