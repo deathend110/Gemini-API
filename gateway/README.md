@@ -2,7 +2,7 @@
 
 本目录提供一个本地 OpenAI-compatible 网关，方便把 `gemini_webapi` 暴露给 AstrBot、Fitness Agent 或其他支持 OpenAI Chat Completions 协议的客户端。
 
-当前 V1.0 核心能力：
+当前 V1.1 核心能力：
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
@@ -76,6 +76,8 @@ set GEMINI_GATEWAY_PROXY=http://127.0.0.1:10090/
   -Port 8010
 ```
 
+或者在`set_gateway_env.ps1`内部设置好，直接powershell进入项目根目录运行. .\gateway\set_gateway_env.ps1
+
 ## 2. 启动网关
 
 在仓库根目录执行：
@@ -102,6 +104,25 @@ http://127.0.0.1:8010
 ```bash
 curl http://127.0.0.1:8010/health
 ```
+
+## 2.1 V1.1 性能优化说明
+
+V1.1 在不改变 OpenAI-compatible 接口形状的前提下，主要做了三项性能优化：
+
+- 网关启动时会预热上游 Gemini 会话，首个真实请求不再承担完整初始化成本
+- 普通对话与流式对话会复用共享上游 `GeminiClient`，不再每请求都 `init/close`
+- `cookies.json` 会在启动后加载进内存缓存，后续请求不再重复读文件
+
+同时，V1.1 增加了共享 client 失效后的受控重建：
+
+- 当上游出现 `AuthError`、`TimeoutError`、`APIError`、`GeminiError` 时，当前请求最多触发一次重建重试
+- 流式请求只会在首个 chunk 之前失败时重建，避免已经输出的内容重复
+
+注意事项：
+
+- 首次启动阶段会多花一点时间，因为 startup 里会先完成 warmup
+- 如果你手动更新了本地 `cookies.json`，请重启 gateway，让新的 cookies 重新加载生效
+- 当前优化重点是连续请求延迟，不是高并发连接池
 
 ## 3. OpenAI-compatible 接口
 
@@ -228,6 +249,7 @@ AstrBot 侧按 OpenAI 服务接入即可：
 
 ## 7. 当前限制
 
-- V1.0 仍为无状态网关，客户端必须每次传完整 `messages`
+- V1.1 仍为无状态网关，客户端必须每次传完整 `messages`
 - `tools` 采用最小可用协议，依赖模型按约定输出 JSON
 - 流式工具调用是兼容型实现，不保证逐 token 输出工具参数
+- 共享 client 当前是单实例复用，优先优化连续请求延迟，不是最终并发形态

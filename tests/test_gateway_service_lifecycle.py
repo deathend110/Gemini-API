@@ -38,7 +38,12 @@ sys.modules.setdefault("gemini_webapi.exceptions", exceptions_stub)
 
 from gateway.config import GatewaySettings
 from gateway.schemas import ChatCompletionRequest, ChatMessage
+from gateway import service as gateway_service_module
 from gateway.service import GatewayService
+
+RecoverableAPIError = gateway_service_module.APIError
+RecoverableGeminiError = gateway_service_module.GeminiError
+RecoverableTimeoutError = gateway_service_module.TimeoutError
 
 
 class FakeGeminiClient:
@@ -93,7 +98,7 @@ class FakeGeminiClient:
                 self.stream_error_after_chunks is not None
                 and index >= self.stream_error_after_chunks
             ):
-                raise StubAPIError("stream interrupted")
+                raise RecoverableAPIError("stream interrupted")
 
 
 class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
@@ -206,7 +211,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
 
     async def test_generate_text_rebuilds_shared_client_after_timeout(self) -> None:
         service = GatewayService(self.settings)
-        first_client = FakeGeminiClient(generate_error=StubTimeoutError("timeout"))
+        first_client = FakeGeminiClient(generate_error=RecoverableTimeoutError("timeout"))
         second_client = FakeGeminiClient(text_result="recovered reply")
         service._build_client_from_cached_cookies = Mock(
             side_effect=[first_client, second_client]
@@ -229,7 +234,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         service = GatewayService(self.settings)
-        first_client = FakeGeminiClient(stream_error=StubAPIError("stream failed"))
+        first_client = FakeGeminiClient(stream_error=RecoverableAPIError("stream failed"))
         second_client = FakeGeminiClient(stream_chunks=["re", "covered"])
         service._build_client_from_cached_cookies = Mock(
             side_effect=[first_client, second_client]
@@ -253,14 +258,14 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
 
     async def test_generate_text_raises_when_rebuilt_client_fails_again(self) -> None:
         service = GatewayService(self.settings)
-        first_client = FakeGeminiClient(generate_error=StubGeminiError("first"))
-        second_client = FakeGeminiClient(generate_error=StubAPIError("second"))
+        first_client = FakeGeminiClient(generate_error=RecoverableGeminiError("first"))
+        second_client = FakeGeminiClient(generate_error=RecoverableAPIError("second"))
         service._build_client_from_cached_cookies = Mock(
             side_effect=[first_client, second_client]
         )
         request = self.make_request()
 
-        with self.assertRaises(StubAPIError):
+        with self.assertRaises(RecoverableAPIError):
             await service.generate_text(
                 prompt="hello",
                 upstream_model="gemini-3-flash",
@@ -273,14 +278,14 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
 
     async def test_generate_text_closes_rebuilt_client_when_reinit_fails(self) -> None:
         service = GatewayService(self.settings)
-        first_client = FakeGeminiClient(generate_error=StubTimeoutError("timeout"))
-        second_client = FakeGeminiClient(init_error=StubAPIError("init failed"))
+        first_client = FakeGeminiClient(generate_error=RecoverableTimeoutError("timeout"))
+        second_client = FakeGeminiClient(init_error=RecoverableAPIError("init failed"))
         service._build_client_from_cached_cookies = Mock(
             side_effect=[first_client, second_client]
         )
         request = self.make_request()
 
-        with self.assertRaises(StubAPIError):
+        with self.assertRaises(RecoverableAPIError):
             await service.generate_text(
                 prompt="hello",
                 upstream_model="gemini-3-flash",
@@ -324,7 +329,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
             side_effect=[first_client, second_client]
         )
         held_client, held_generation = await service._acquire_shared_client()
-        held_client.generate_error = StubTimeoutError("timeout")
+        held_client.generate_error = RecoverableTimeoutError("timeout")
         request = self.make_request()
 
         text = await service.generate_text(
@@ -378,7 +383,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         request = self.make_request()
         chunks: list[str] = []
 
-        with self.assertRaises(StubAPIError):
+        with self.assertRaises(RecoverableAPIError):
             async for chunk in service.generate_stream(
                 prompt="hello",
                 upstream_model="gemini-3-flash",
