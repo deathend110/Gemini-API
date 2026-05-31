@@ -1,0 +1,4 @@
+以及我现在正在开发一个健身Agent，本地路径：G:\VSCODE-G\Fitness Agent MVP
+后续这个Agent也会扩展到需要用我这里反代出来的API的，你可以看看，所以在开发第一版FastAPI时要保证通用性。不过现在Agent使用的是openai接口的deepseek api，所以我们用openai接口包装是很好的
+
+我想的是这里做成一个专门的反代服务，启动后会给出base_url和api-key，我们在其他地方使用只要输入baseurl和apikey，选择好模型和思考强度就能用了

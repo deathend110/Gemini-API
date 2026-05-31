@@ -1,6 +1,7 @@
 import asyncio
 import codecs
 import io
+import os
 import random
 import time
 import secrets
@@ -68,6 +69,24 @@ from .utils import (
 )
 
 
+def _resolve_proxy(proxy: str | None) -> str | None:
+    """
+    Resolve proxy from explicit argument first, then common proxy env vars.
+    """
+
+    if proxy:
+        return proxy
+
+    return (
+        os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+        or os.getenv("HTTP_PROXY")
+        or os.getenv("http_proxy")
+        or os.getenv("ALL_PROXY")
+        or os.getenv("all_proxy")
+    )
+
+
 class GeminiClient(ChatMixin, GemMixin, ResearchMixin):
     """
     Async requests client interface for gemini.google.com.
@@ -82,7 +101,7 @@ class GeminiClient(ChatMixin, GemMixin, ResearchMixin):
     secure_1psidts: `str`, optional
         __Secure-1PSIDTS cookie value, some Google accounts don't require this value, provide only if it's in the cookie list.
     proxy: `str`, optional
-        Proxy URL.
+        Proxy URL. If not provided, common proxy environment variables will be used.
     kwargs: `dict`, optional
         Additional arguments which will be passed to the http client.
         Refer to `curl_cffi.requests.AsyncSession` for more information.
@@ -129,7 +148,7 @@ class GeminiClient(ChatMixin, GemMixin, ResearchMixin):
         **kwargs,
     ):
         super().__init__()
-        self.proxy = proxy
+        self.proxy = _resolve_proxy(proxy)
         self.client: AsyncSession | None = None
         self.access_token: str | None = None
         self.build_label: str | None = None

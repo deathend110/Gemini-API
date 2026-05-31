@@ -146,6 +146,7 @@ Secure_1PSIDTS = "COOKIE VALUE HERE"
 
 async def main():
     # If browser-cookie3 is installed, simply use `client = GeminiClient()`
+    # If `proxy` is omitted, GeminiClient will fall back to HTTPS_PROXY / HTTP_PROXY / ALL_PROXY.
     client = GeminiClient(Secure_1PSID, Secure_1PSIDTS, proxy=None)
     await client.init(timeout=30, auto_close=False, close_delay=300, auto_refresh=True)
 
