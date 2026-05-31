@@ -1,6 +1,7 @@
 import contextlib
 import io
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -65,6 +66,32 @@ class TestGatewayApi(unittest.TestCase):
                 "gemini-3.1-flash-lite",
             ],
         )
+
+    def test_account_status_returns_snapshot_dict(self) -> None:
+        snapshot_payload = {
+            "raw_account_status": "AVAILABLE",
+            "raw_account_status_code": 1,
+            "chat_available": True,
+            "advanced_models_available": True,
+            "deep_research_available": False,
+            "full_web_capability_available": False,
+            "mode": "degraded",
+            "unavailable_reasons": ["deep_research_unavailable"],
+        }
+        snapshot = SimpleNamespace(to_dict=lambda: snapshot_payload)
+
+        with patch.object(
+            self.app.state.gateway_service,
+            "get_account_snapshot",
+            return_value=snapshot,
+        ):
+            response = self.client.get(
+                "/v1/account/status",
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), snapshot_payload)
 
     def test_chat_completions_alias_route_exists(self) -> None:
         payload = {
@@ -351,9 +378,14 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_main_prints_startup_summary(self) -> None:
         stdout = io.StringIO()
+        snapshot = SimpleNamespace(mode="degraded")
+        app = SimpleNamespace(state=SimpleNamespace(gateway_service=SimpleNamespace(
+            get_account_snapshot=lambda: snapshot
+        )))
 
         with (
             patch("gateway.main.GatewaySettings", return_value=GatewaySettings(api_key="demo-key")),
+            patch("gateway.main.create_app", return_value=app),
             patch("uvicorn.run") as run_mock,
             contextlib.redirect_stdout(stdout),
         ):
@@ -362,7 +394,30 @@ class TestGatewayApi(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Base URL: http://127.0.0.1:8010/v1", output)
         self.assertIn("API Key: demo-key", output)
+        self.assertIn("Account mode: degraded", output)
         run_mock.assert_called_once()
+
+    def test_main_startup_summary_ignores_account_snapshot_errors(self) -> None:
+        stdout = io.StringIO()
+        app = SimpleNamespace(state=SimpleNamespace(gateway_service=SimpleNamespace(
+            get_account_snapshot=unittest.mock.Mock(side_effect=RuntimeError("boom"))
+        )))
+
+        with (
+            patch("gateway.main.GatewaySettings", return_value=GatewaySettings(api_key="demo-key")),
+            patch("gateway.main.create_app", return_value=app),
+            patch("uvicorn.run") as run_mock,
+            contextlib.redirect_stdout(stdout),
+        ):
+            main()
+
+        output = stdout.getvalue()
+        self.assertIn("Account mode: unavailable", output)
+        run_mock.assert_called_once_with(
+            app,
+            host="127.0.0.1",
+            port=8010,
+        )
 
 
 if __name__ == "__main__":

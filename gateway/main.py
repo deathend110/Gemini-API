@@ -60,6 +60,17 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     def list_models(service: Any = Depends(get_gateway_service)) -> Any:
         return service.list_models()
 
+    @app.get("/v1/account/status", dependencies=[Depends(verify_bearer)])
+    def get_account_status(service: Any = Depends(get_gateway_service)) -> dict[str, object]:
+        snapshot = service.get_account_snapshot()
+        if snapshot is None:
+            raise GatewayServiceError(
+                message="Gateway account snapshot unavailable.",
+                code="account_snapshot_unavailable",
+                status_code=503,
+            )
+        return snapshot.to_dict()
+
     @app.post(
         "/v1/chat/completions",
         dependencies=[Depends(verify_bearer)],
@@ -105,12 +116,22 @@ def main() -> None:
     import uvicorn
 
     settings = GatewaySettings()
+    app = create_app(settings=settings)
     print(f"Base URL: http://{settings.host}:{settings.port}/v1")
     print(f"API Key: {settings.api_key}")
     print(f"Default model: {settings.default_model}")
     print(f"Default reasoning effort: {settings.default_reasoning_effort}")
+    account_mode = "unknown"
+    try:
+        service = getattr(app.state, "gateway_service", None)
+        snapshot = service.get_account_snapshot() if service is not None else None
+        if snapshot is not None and isinstance(getattr(snapshot, "mode", None), str):
+            account_mode = snapshot.mode
+    except Exception:
+        account_mode = "unavailable"
+    print(f"Account mode: {account_mode}")
     uvicorn.run(
-        create_app(settings=settings),
+        app,
         host=settings.host,
         port=settings.port,
     )
