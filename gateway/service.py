@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -68,6 +69,10 @@ class GatewayService:
             model.canonical_id: model
             for model in CANONICAL_MODELS
         }
+        self._cached_cookies: dict[str, str] | None = None
+        self._shared_client: GeminiClient | None = None
+        self._is_warmed_up = False
+        self._shared_client_lock = asyncio.Lock()
 
     def list_models(self) -> ModelListResponse:
         return ModelListResponse(
@@ -127,6 +132,11 @@ class GatewayService:
                 status_code=500,
             )
         return cookies
+
+    def get_cached_cookies(self) -> dict[str, str]:
+        if self._cached_cookies is None:
+            self._cached_cookies = self.load_cookies()
+        return self._cached_cookies
 
     def _extract_cookies(self, raw_data: Any) -> dict[str, str]:
         if isinstance(raw_data, dict) and isinstance(raw_data.get("cookies"), dict):
@@ -596,21 +606,13 @@ class GatewayService:
         request: ChatCompletionRequest,
         files: list[Path] | None = None,
     ) -> str:
-        client = self.build_gemini_client()
-        try:
-            await client.init(
-                timeout=self.settings.request_timeout,
-                auto_refresh=False,
-                auto_close=False,
-            )
-            response = await client.generate_content(
-                prompt=prompt,
-                model=upstream_model,
-                files=files,
-            )
-            return response.text
-        finally:
-            await client.close()
+        client = await self.get_shared_client()
+        response = await client.generate_content(
+            prompt=prompt,
+            model=upstream_model,
+            files=files,
+        )
+        return response.text
 
     async def generate_stream(
         self,
@@ -619,26 +621,18 @@ class GatewayService:
         request: ChatCompletionRequest,
         files: list[Path] | None = None,
     ) -> AsyncGenerator[Any, None]:
-        client = self.build_gemini_client()
-        try:
-            await client.init(
-                timeout=self.settings.request_timeout,
-                auto_refresh=False,
-                auto_close=False,
-            )
-            async for chunk in client.generate_content_stream(
-                prompt=prompt,
-                model=upstream_model,
-                files=files,
-            ):
-                yield chunk
-        finally:
-            await client.close()
+        client = await self.get_shared_client()
+        async for chunk in client.generate_content_stream(
+            prompt=prompt,
+            model=upstream_model,
+            files=files,
+        ):
+            yield chunk
 
-    def build_gemini_client(self) -> GeminiClient:
+    def _build_client_from_cached_cookies(self) -> GeminiClient:
         from gemini_webapi import GeminiClient
 
-        cookies = self.load_cookies()
+        cookies = self.get_cached_cookies()
         psid = cookies.get("__Secure-1PSID")
         psidts = cookies.get("__Secure-1PSIDTS", "")
         extra_cookies = {
@@ -654,6 +648,51 @@ class GatewayService:
         if extra_cookies:
             client.cookies = extra_cookies
         return client
+
+    async def warmup(self) -> None:
+        if self._is_warmed_up and self._shared_client is not None:
+            return
+
+        async with self._shared_client_lock:
+            if self._is_warmed_up and self._shared_client is not None:
+                return
+
+            client = self._shared_client or self._build_client_from_cached_cookies()
+            try:
+                await client.init(
+                    timeout=self.settings.request_timeout,
+                    auto_refresh=True,
+                    auto_close=False,
+                )
+            except Exception:
+                self._shared_client = None
+                self._is_warmed_up = False
+                raise
+
+            self._shared_client = client
+            self._is_warmed_up = True
+
+    async def shutdown(self) -> None:
+        async with self._shared_client_lock:
+            client = self._shared_client
+            self._shared_client = None
+            self._is_warmed_up = False
+
+        if client is not None:
+            await client.close()
+
+    async def get_shared_client(self) -> GeminiClient:
+        await self.warmup()
+        if self._shared_client is None:
+            raise GatewayServiceError(
+                message="Gemini client warmup failed.",
+                code="upstream_error",
+                status_code=500,
+            )
+        return self._shared_client
+
+    def build_gemini_client(self) -> GeminiClient:
+        return self._build_client_from_cached_cookies()
 
     def _normalize_exception(self, exc: Exception) -> GatewayServiceError:
         if isinstance(exc, GatewayServiceError):
