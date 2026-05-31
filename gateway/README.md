@@ -55,6 +55,27 @@ set GEMINI_GATEWAY_PROXY=http://127.0.0.1:10090/
 - 当前支持 `reasoning_effort=standard|extended`；`extended` 会作为额外推理提示注入到 prompt
 - 代理、Cookies 路径等本机依赖请显式配置，不要假设调用方环境
 
+也可以直接使用仓库内置脚本为当前 PowerShell 会话设置环境变量：
+
+```powershell
+. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
+```
+
+说明：
+
+- 前面的 `. ` 不能省略，这是 PowerShell 的 dot-source 语法
+- 脚本默认把 `cookies.json` 指向仓库根目录下的 `cookies.json`
+- 如需自定义代理、模型或端口，可直接传参数，例如：
+
+```powershell
+. .\gateway\set_gateway_env.ps1 `
+  -ApiKey "your-local-key" `
+  -Proxy "http://127.0.0.1:10090/" `
+  -DefaultModel "gemini-3.5-flash" `
+  -DefaultReasoningEffort "standard" `
+  -Port 8000
+```
+
 ## 2. 启动网关
 
 在仓库根目录执行：
