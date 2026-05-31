@@ -17,6 +17,13 @@ def _get_env_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _get_env_positive_int(name: str, default: int) -> int:
+    value = _get_env_int(name, default)
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer: {value}")
+    return value
+
+
 def _get_env_bool(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -95,7 +102,7 @@ class GatewaySettings:
         )
     )
     cookie_persist_interval_seconds: int = field(
-        default_factory=lambda: _get_env_int(
+        default_factory=lambda: _get_env_positive_int(
             "GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS",
             60,
         )

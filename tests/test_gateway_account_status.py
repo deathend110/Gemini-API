@@ -91,6 +91,35 @@ class TestGatewayAccountStatus(unittest.TestCase):
 
         validate_required_account_level(snapshot, "full_web")
 
+    def test_required_standard_accepts_chat_with_advanced_models(self) -> None:
+        snapshot = GatewayAccountSnapshot(
+            raw_account_status="AVAILABLE",
+            raw_account_status_code=1000,
+            chat_available=True,
+            advanced_models_available=True,
+            deep_research_available=False,
+            full_web_capability_available=False,
+            mode="degraded",
+            unavailable_reasons=["deep_research_unavailable"],
+        )
+
+        validate_required_account_level(snapshot, "standard")
+
+    def test_required_standard_rejects_missing_advanced_models(self) -> None:
+        snapshot = GatewayAccountSnapshot(
+            raw_account_status="LIMITED",
+            raw_account_status_code=1001,
+            chat_available=True,
+            advanced_models_available=False,
+            deep_research_available=True,
+            full_web_capability_available=True,
+            mode="available",
+            unavailable_reasons=["advanced_models_unavailable"],
+        )
+
+        with self.assertRaisesRegex(ValueError, "standard"):
+            validate_required_account_level(snapshot, "standard")
+
     def test_gateway_settings_exposes_v12_account_defaults(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             settings = GatewaySettings()
@@ -119,6 +148,22 @@ class TestGatewayAccountStatus(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "premium"):
                 GatewaySettings()
+
+    def test_gateway_settings_rejects_non_positive_cookie_persist_interval(self) -> None:
+        for invalid_value in ("0", "-5"):
+            with self.subTest(invalid_value=invalid_value):
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS": invalid_value,
+                    },
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS",
+                    ):
+                        GatewaySettings()
 
 
 if __name__ == "__main__":
