@@ -81,12 +81,12 @@ class TestGatewayAccountStatus(unittest.TestCase):
         snapshot = GatewayAccountSnapshot(
             raw_account_status="LIMITED",
             raw_account_status_code=1001,
-            chat_available=False,
+            chat_available=True,
             advanced_models_available=False,
             deep_research_available=False,
             full_web_capability_available=True,
-            mode="unknown",
-            unavailable_reasons=[],
+            mode="degraded",
+            unavailable_reasons=["advanced_models_unavailable"],
         )
 
         validate_required_account_level(snapshot, "full_web")
@@ -100,6 +100,25 @@ class TestGatewayAccountStatus(unittest.TestCase):
         self.assertTrue(settings.account_probe_enabled)
         self.assertFalse(settings.account_strict_mode)
         self.assertEqual(settings.account_required_level, "basic")
+
+    def test_gateway_settings_normalizes_account_required_level(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL": " Full_Web "},
+            clear=True,
+        ):
+            settings = GatewaySettings()
+
+        self.assertEqual(settings.account_required_level, "full_web")
+
+    def test_gateway_settings_rejects_invalid_account_required_level(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL": "premium"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "premium"):
+                GatewaySettings()
 
 
 if __name__ == "__main__":
