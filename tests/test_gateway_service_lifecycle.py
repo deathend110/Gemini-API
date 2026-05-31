@@ -449,6 +449,84 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         await service._release_shared_client(held_generation)
         self.assertEqual(first_client.close_calls, 1)
 
+    async def test_rebuild_shared_client_uses_latest_cookies_from_failed_client(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        service._cached_cookies = {
+            "__Secure-1PSID": "psid-value",
+            "__Secure-1PSIDTS": "stale-psidts-value",
+            "NID": "stale-nid-value",
+        }
+        failed_client = FakeGeminiClient(
+            cookie_overrides={
+                "__Secure-1PSIDTS": "fresh-psidts-value",
+                "NID": "fresh-nid-value",
+                "SIDCC": "sidcc-value",
+            }
+        )
+        service._shared_client = failed_client
+        service._shared_client_generation = 1
+
+        class RecordingGeminiClient:
+            def __init__(
+                self,
+                *,
+                secure_1psid: str,
+                secure_1psidts: str,
+                proxy: str,
+            ) -> None:
+                self.secure_1psid = secure_1psid
+                self.secure_1psidts = secure_1psidts
+                self.proxy = proxy
+                self.cookies: dict[str, str] | None = None
+                self.init_calls: list[dict[str, object]] = []
+                self.close_calls = 0
+                self.account_status = SimpleNamespace(name="AVAILABLE", value=1000)
+                self._model_registry = {
+                    "advanced": SimpleNamespace(
+                        advanced_only=True,
+                        is_available=True,
+                    )
+                }
+
+            async def init(self, **kwargs) -> None:
+                self.init_calls.append(kwargs)
+
+            async def inspect_account_status(self) -> dict[str, object]:
+                return {
+                    "summary": {
+                        "deep_research_feature_present": True,
+                        "rejected_probes": [],
+                    }
+                }
+
+            async def close(self) -> None:
+                self.close_calls += 1
+
+        with patch.object(gemini_stub, "GeminiClient", RecordingGeminiClient):
+            rebuilt_client, rebuilt_generation = await service._rebuild_shared_client_after_failure(
+                failed_client=failed_client,
+                failed_generation=1,
+            )
+
+        self.assertEqual(rebuilt_client.secure_1psid, "psid-value")
+        self.assertEqual(rebuilt_client.secure_1psidts, "fresh-psidts-value")
+        self.assertEqual(
+            rebuilt_client.cookies,
+            {
+                "NID": "fresh-nid-value",
+                "SIDCC": "sidcc-value",
+            },
+        )
+        self.assertEqual(
+            service.get_cached_cookies()["__Secure-1PSIDTS"],
+            "fresh-psidts-value",
+        )
+        self.assertEqual(service.get_cached_cookies()["SIDCC"], "sidcc-value")
+        self.assertEqual(rebuilt_generation, 2)
+        self.assertEqual(failed_client.close_calls, 1)
+
     async def test_generate_text_rebuild_does_not_close_client_held_by_other_request(
         self,
     ) -> None:
@@ -524,6 +602,52 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chunks, ["partial"])
         self.assertEqual(first_client.close_calls, 0)
         self.assertEqual(second_client.init_calls, [])
+
+    def test_persist_cookies_replaces_target_file_atomically(self) -> None:
+        service = GatewayService(self.settings)
+        service.get_cached_cookies()
+        write_paths: list[Path] = []
+        replace_calls: list[tuple[Path, Path]] = []
+        original_write_text = Path.write_text
+        original_replace = Path.replace
+
+        def tracking_write_text(path: Path, data: str, *args, **kwargs) -> int:
+            write_paths.append(Path(path))
+            return original_write_text(path, data, *args, **kwargs)
+
+        def tracking_replace(path: Path, target: Path, *args, **kwargs) -> Path:
+            replace_calls.append((Path(path), Path(target)))
+            return original_replace(path, target, *args, **kwargs)
+
+        with patch.object(Path, "write_text", new=tracking_write_text), patch.object(
+            Path,
+            "replace",
+            new=tracking_replace,
+        ):
+            service.persist_cookies(
+                FakeCookies(
+                    {
+                        "__Secure-1PSID": "psid-value",
+                        "__Secure-1PSIDTS": "atomic-psidts-value",
+                        "SIDCC": "sidcc-value",
+                    }
+                ),
+                force=True,
+            )
+
+        self.assertEqual(len(replace_calls), 1)
+        temp_path, target_path = replace_calls[0]
+        self.assertEqual(target_path, self.cookies_path)
+        self.assertNotEqual(temp_path, self.cookies_path)
+        self.assertNotIn(self.cookies_path, write_paths)
+        self.assertEqual(write_paths, [temp_path])
+
+        persisted = json.loads(self.cookies_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            persisted["cookies"]["__Secure-1PSIDTS"],
+            "atomic-psidts-value",
+        )
+        self.assertEqual(persisted["cookies"]["SIDCC"], "sidcc-value")
 
 
 if __name__ == "__main__":

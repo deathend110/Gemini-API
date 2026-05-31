@@ -225,10 +225,9 @@ class GatewayService:
         if not force and not self.settings.cookie_persist_enabled:
             return
 
-        serialized = self._serialize_cookies_for_json(cookies)
-        if self._cached_cookies:
-            for name, value in self._cached_cookies.items():
-                serialized.setdefault(name, value)
+        serialized = self._merge_serialized_cookies_with_cache(
+            self._serialize_cookies_for_json(cookies)
+        )
 
         if "__Secure-1PSID" not in serialized:
             raise GatewayServiceError(
@@ -241,11 +240,42 @@ class GatewayService:
             "cookies": dict(sorted(serialized.items())),
             "updated_at": int(time.time()),
         }
-        Path(self.settings.cookies_json_path).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        cookies_path = Path(self.settings.cookies_json_path)
+        temp_path = cookies_path.with_name(
+            f".{cookies_path.name}.{uuid4().hex}.tmp"
         )
+        try:
+            temp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temp_path.replace(cookies_path)
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
         self._cached_cookies = dict(payload["cookies"])
+
+    def _merge_serialized_cookies_with_cache(
+        self,
+        serialized: dict[str, str],
+    ) -> dict[str, str]:
+        merged = dict(serialized)
+        if self._cached_cookies:
+            for name, value in self._cached_cookies.items():
+                merged.setdefault(name, value)
+        return merged
+
+    def _sync_cached_cookies_from_client(self, client: GeminiClient) -> None:
+        runtime_cookies = self._serialize_cookies_for_json(
+            getattr(client, "cookies", None)
+        )
+        if not runtime_cookies:
+            return
+
+        merged = dict(self._cached_cookies or {})
+        merged.update(runtime_cookies)
+        self._cached_cookies = merged
 
     def _cookies_from_list(self, cookie_items: list[Any]) -> dict[str, str]:
         cookies: dict[str, str] = {}
@@ -992,6 +1022,7 @@ class GatewayService:
                 )
                 return self._shared_client, generation
 
+            self._sync_cached_cookies_from_client(failed_client)
             client = self._build_client_from_cached_cookies()
             try:
                 await self._init_shared_client(client)
