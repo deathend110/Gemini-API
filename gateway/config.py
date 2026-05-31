@@ -41,7 +41,7 @@ def _resolve_api_key(api_key: str) -> str:
 @dataclass
 class GatewaySettings:
     host: str = field(default_factory=lambda: _get_env("GEMINI_GATEWAY_HOST", "127.0.0.1"))
-    port: int = field(default_factory=lambda: _get_env_int("GEMINI_GATEWAY_PORT", 8000))
+    port: int = field(default_factory=lambda: _get_env_int("GEMINI_GATEWAY_PORT", 8010))
     cookies_json_path: str = field(
         default_factory=lambda: _get_env(
             "GEMINI_GATEWAY_COOKIES_JSON_PATH",

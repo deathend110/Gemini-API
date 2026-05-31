@@ -43,7 +43,7 @@ pip install -e .
 set GEMINI_GATEWAY_API_KEY=replace-with-your-key
 set GEMINI_GATEWAY_COOKIES_JSON_PATH=G:\Gemini API\Gemini-API\cookies.json
 set GEMINI_GATEWAY_HOST=127.0.0.1
-set GEMINI_GATEWAY_PORT=8000
+set GEMINI_GATEWAY_PORT=8010
 set GEMINI_GATEWAY_DEFAULT_MODEL=gemini-3.5-flash
 set GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT=standard
 set GEMINI_GATEWAY_PROXY=http://127.0.0.1:10090/
@@ -73,7 +73,7 @@ set GEMINI_GATEWAY_PROXY=http://127.0.0.1:10090/
   -Proxy "http://127.0.0.1:10090/" `
   -DefaultModel "gemini-3.5-flash" `
   -DefaultReasoningEffort "standard" `
-  -Port 8000
+  -Port 8010
 ```
 
 ## 2. 启动网关
@@ -87,7 +87,7 @@ python -m gateway.main
 默认监听：
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8010
 ```
 
 启动后会打印：
@@ -100,7 +100,7 @@ http://127.0.0.1:8000
 健康检查：
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8010/health
 ```
 
 ## 3. OpenAI-compatible 接口
@@ -108,14 +108,14 @@ curl http://127.0.0.1:8000/health
 ### 3.1 列模型
 
 ```bash
-curl http://127.0.0.1:8000/v1/models ^
+curl http://127.0.0.1:8010/v1/models ^
   -H "Authorization: Bearer replace-with-your-key"
 ```
 
 ### 3.2 聊天补全
 
 ```bash
-curl http://127.0.0.1:8000/v1/chat/completions ^
+curl http://127.0.0.1:8010/v1/chat/completions ^
   -H "Authorization: Bearer replace-with-your-key" ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"gemini-3.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
@@ -124,7 +124,7 @@ curl http://127.0.0.1:8000/v1/chat/completions ^
 ### 3.3 流式输出
 
 ```bash
-curl http://127.0.0.1:8000/v1/chat/completions ^
+curl http://127.0.0.1:8010/v1/chat/completions ^
   -H "Authorization: Bearer replace-with-your-key" ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"gemini-3.5-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"请分三点介绍你自己\"}]}"
@@ -209,7 +209,7 @@ data: [DONE]
 
 AstrBot 侧按 OpenAI 服务接入即可：
 
-- Base URL: `http://127.0.0.1:8000/v1`
+- Base URL: `http://127.0.0.1:8010/v1`
 - API Key: 你配置的 `GEMINI_GATEWAY_API_KEY`
 - Model: `gemini-3.5-flash`、`gemini-3.1-pro` 或 `gemini-3.1-flash-lite`
 
