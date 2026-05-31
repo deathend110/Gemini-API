@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -8,12 +9,51 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from gateway.auth import build_bearer_verifier
 from gateway.config import GatewaySettings
-from gateway.schemas import ChatCompletionRequest, ModelListResponse
+from gateway.schemas import (
+    AccountStatusResponse,
+    ChatCompletionRequest,
+    ModelListResponse,
+)
 from gateway.service import GatewayService, GatewayServiceError
 
 
 def get_gateway_service(request: Request) -> Any:
     return request.app.state.gateway_service
+
+
+def build_account_status_response(snapshot: Any) -> AccountStatusResponse:
+    return AccountStatusResponse(
+        raw_account_status=snapshot.raw_account_status,
+        raw_account_status_code=snapshot.raw_account_status_code,
+        chat_available=snapshot.chat_available,
+        advanced_models_available=snapshot.advanced_models_available,
+        deep_research_available=snapshot.deep_research_available,
+        full_web_capability_available=snapshot.full_web_capability_available,
+        mode=snapshot.mode,
+        unavailable_reasons=list(snapshot.unavailable_reasons),
+    )
+
+
+def resolve_startup_account_mode(app: FastAPI) -> str:
+    service = getattr(app.state, "gateway_service", None)
+    if service is None:
+        return "unavailable"
+
+    try:
+        asyncio.run(service.warmup())
+    except Exception:
+        return "unavailable"
+
+    try:
+        snapshot = service.get_account_snapshot()
+    except Exception:
+        return "unavailable"
+
+    mode = getattr(snapshot, "mode", None)
+    if snapshot is None or not isinstance(mode, str):
+        return "unknown"
+
+    return mode
 
 
 def create_app(settings: GatewaySettings | None = None) -> FastAPI:
@@ -60,8 +100,14 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     def list_models(service: Any = Depends(get_gateway_service)) -> Any:
         return service.list_models()
 
-    @app.get("/v1/account/status", dependencies=[Depends(verify_bearer)])
-    def get_account_status(service: Any = Depends(get_gateway_service)) -> dict[str, object]:
+    @app.get(
+        "/v1/account/status",
+        dependencies=[Depends(verify_bearer)],
+        response_model=AccountStatusResponse,
+    )
+    def get_account_status(
+        service: Any = Depends(get_gateway_service),
+    ) -> AccountStatusResponse:
         snapshot = service.get_account_snapshot()
         if snapshot is None:
             raise GatewayServiceError(
@@ -69,7 +115,7 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
                 code="account_snapshot_unavailable",
                 status_code=503,
             )
-        return snapshot.to_dict()
+        return build_account_status_response(snapshot)
 
     @app.post(
         "/v1/chat/completions",
@@ -121,15 +167,7 @@ def main() -> None:
     print(f"API Key: {settings.api_key}")
     print(f"Default model: {settings.default_model}")
     print(f"Default reasoning effort: {settings.default_reasoning_effort}")
-    account_mode = "unknown"
-    try:
-        service = getattr(app.state, "gateway_service", None)
-        snapshot = service.get_account_snapshot() if service is not None else None
-        if snapshot is not None and isinstance(getattr(snapshot, "mode", None), str):
-            account_mode = snapshot.mode
-    except Exception:
-        account_mode = "unavailable"
-    print(f"Account mode: {account_mode}")
+    print(f"Account mode: {resolve_startup_account_mode(app)}")
     uvicorn.run(
         app,
         host=settings.host,

@@ -1,10 +1,42 @@
 import contextlib
 import io
+import sys
+import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+
+gemini_stub = types.ModuleType("gemini_webapi")
+gemini_stub.GeminiClient = object
+
+exceptions_stub = types.ModuleType("gemini_webapi.exceptions")
+
+
+class _AuthError(Exception):
+    pass
+
+
+class _APIError(Exception):
+    pass
+
+
+class _GeminiError(Exception):
+    pass
+
+
+class _TimeoutError(_GeminiError):
+    pass
+
+
+exceptions_stub.APIError = _APIError
+exceptions_stub.AuthError = _AuthError
+exceptions_stub.GeminiError = _GeminiError
+exceptions_stub.TimeoutError = _TimeoutError
+
+sys.modules.setdefault("gemini_webapi", gemini_stub)
+sys.modules.setdefault("gemini_webapi.exceptions", exceptions_stub)
 
 from gateway.config import GatewaySettings
 from gateway.main import create_app, main
@@ -67,18 +99,23 @@ class TestGatewayApi(unittest.TestCase):
             ],
         )
 
-    def test_account_status_returns_snapshot_dict(self) -> None:
-        snapshot_payload = {
-            "raw_account_status": "AVAILABLE",
-            "raw_account_status_code": 1,
-            "chat_available": True,
-            "advanced_models_available": True,
-            "deep_research_available": False,
-            "full_web_capability_available": False,
-            "mode": "degraded",
-            "unavailable_reasons": ["deep_research_unavailable"],
-        }
-        snapshot = SimpleNamespace(to_dict=lambda: snapshot_payload)
+    def test_account_status_requires_bearer_auth(self) -> None:
+        response = self.client.get("/v1/account/status")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_account_status_returns_documented_schema(self) -> None:
+        snapshot = SimpleNamespace(
+            raw_account_status="AVAILABLE",
+            raw_account_status_code=1,
+            chat_available=True,
+            advanced_models_available=True,
+            deep_research_available=False,
+            full_web_capability_available=False,
+            mode="degraded",
+            unavailable_reasons=["deep_research_unavailable"],
+            internal_only="should-not-leak",
+        )
 
         with patch.object(
             self.app.state.gateway_service,
@@ -91,7 +128,37 @@ class TestGatewayApi(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), snapshot_payload)
+        self.assertEqual(
+            response.json(),
+            {
+                "raw_account_status": "AVAILABLE",
+                "raw_account_status_code": 1,
+                "chat_available": True,
+                "advanced_models_available": True,
+                "deep_research_available": False,
+                "full_web_capability_available": False,
+                "mode": "degraded",
+                "unavailable_reasons": ["deep_research_unavailable"],
+            },
+        )
+        self.assertNotIn("internal_only", response.json())
+
+    def test_account_status_returns_503_when_snapshot_missing(self) -> None:
+        with patch.object(
+            self.app.state.gateway_service,
+            "get_account_snapshot",
+            return_value=None,
+        ):
+            response = self.client.get(
+                "/v1/account/status",
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["error"]["code"],
+            "account_snapshot_unavailable",
+        )
 
     def test_chat_completions_alias_route_exists(self) -> None:
         payload = {
@@ -379,9 +446,15 @@ class TestGatewayApi(unittest.TestCase):
     def test_main_prints_startup_summary(self) -> None:
         stdout = io.StringIO()
         snapshot = SimpleNamespace(mode="degraded")
-        app = SimpleNamespace(state=SimpleNamespace(gateway_service=SimpleNamespace(
-            get_account_snapshot=lambda: snapshot
-        )))
+        warmup_mock = AsyncMock()
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                gateway_service=SimpleNamespace(
+                    warmup=warmup_mock,
+                    get_account_snapshot=lambda: snapshot,
+                )
+            )
+        )
 
         with (
             patch("gateway.main.GatewaySettings", return_value=GatewaySettings(api_key="demo-key")),
@@ -395,13 +468,22 @@ class TestGatewayApi(unittest.TestCase):
         self.assertIn("Base URL: http://127.0.0.1:8010/v1", output)
         self.assertIn("API Key: demo-key", output)
         self.assertIn("Account mode: degraded", output)
+        warmup_mock.assert_awaited_once()
         run_mock.assert_called_once()
 
     def test_main_startup_summary_ignores_account_snapshot_errors(self) -> None:
         stdout = io.StringIO()
-        app = SimpleNamespace(state=SimpleNamespace(gateway_service=SimpleNamespace(
-            get_account_snapshot=unittest.mock.Mock(side_effect=RuntimeError("boom"))
-        )))
+        warmup_mock = AsyncMock()
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                gateway_service=SimpleNamespace(
+                    warmup=warmup_mock,
+                    get_account_snapshot=unittest.mock.Mock(
+                        side_effect=RuntimeError("boom")
+                    ),
+                )
+            )
+        )
 
         with (
             patch("gateway.main.GatewaySettings", return_value=GatewaySettings(api_key="demo-key")),
@@ -413,6 +495,7 @@ class TestGatewayApi(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertIn("Account mode: unavailable", output)
+        warmup_mock.assert_awaited_once()
         run_mock.assert_called_once_with(
             app,
             host="127.0.0.1",

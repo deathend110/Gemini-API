@@ -62,6 +62,17 @@ class ModelListResponse(BaseModel):
     data: list[ModelCard]
 
 
+class AccountStatusResponse(BaseModel):
+    raw_account_status: str
+    raw_account_status_code: int | None = None
+    chat_available: bool
+    advanced_models_available: bool
+    deep_research_available: bool
+    full_web_capability_available: bool
+    mode: str
+    unavailable_reasons: list[str] = Field(default_factory=list)
+
+
 class ChatCompletionResponseMessage(BaseModel):
     role: str
     content: str | None
