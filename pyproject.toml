@@ -21,9 +21,11 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "curl-cffi~=0.15.0",
+    "fastapi~=0.116.1",
     "loguru~=0.7.3",
     "orjson~=3.11.7",
     "pydantic~=2.12.5",
+    "uvicorn~=0.35.0",
 ]
 dynamic = ["version"]
 
