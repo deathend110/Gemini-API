@@ -504,7 +504,12 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
             async def close(self) -> None:
                 self.close_calls += 1
 
-        with patch.object(gemini_stub, "GeminiClient", RecordingGeminiClient):
+        active_gemini_module = sys.modules["gemini_webapi"]
+        with patch.object(
+            active_gemini_module,
+            "GeminiClient",
+            RecordingGeminiClient,
+        ):
             rebuilt_client, rebuilt_generation = await service._rebuild_shared_client_after_failure(
                 failed_client=failed_client,
                 failed_generation=1,
