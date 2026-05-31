@@ -16,6 +16,20 @@ class TestGatewayApi(unittest.TestCase):
         self.app = create_app(settings=self.settings)
         self.client = TestClient(self.app)
 
+    def test_app_lifecycle_warms_up_and_shuts_down_gateway_service(self) -> None:
+        warmup_mock = AsyncMock()
+        shutdown_mock = AsyncMock()
+
+        with patch.object(self.app.state.gateway_service, "warmup", warmup_mock), patch.object(
+            self.app.state.gateway_service,
+            "shutdown",
+            shutdown_mock,
+        ):
+            with TestClient(self.app):
+                warmup_mock.assert_awaited_once()
+
+        shutdown_mock.assert_awaited_once()
+
     def test_health_endpoint(self) -> None:
         response = self.client.get("/health")
 
@@ -346,7 +360,7 @@ class TestGatewayApi(unittest.TestCase):
             main()
 
         output = stdout.getvalue()
-        self.assertIn("Base URL: http://127.0.0.1:8000/v1", output)
+        self.assertIn("Base URL: http://127.0.0.1:8010/v1", output)
         self.assertIn("API Key: demo-key", output)
         run_mock.assert_called_once()
 

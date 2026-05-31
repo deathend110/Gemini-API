@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
@@ -18,10 +19,23 @@ def get_gateway_service(request: Request) -> Any:
 def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     resolved_settings = settings or GatewaySettings()
     verify_bearer = build_bearer_verifier(resolved_settings)
+    gateway_service = GatewayService(resolved_settings)
 
-    app = FastAPI(title="Gemini OpenAI Gateway", version="1.0.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await app.state.gateway_service.warmup()
+        try:
+            yield
+        finally:
+            await app.state.gateway_service.shutdown()
 
-    app.state.gateway_service = GatewayService(resolved_settings)
+    app = FastAPI(
+        title="Gemini OpenAI Gateway",
+        version="1.0.0",
+        lifespan=lifespan,
+    )
+
+    app.state.gateway_service = gateway_service
 
     @app.exception_handler(GatewayServiceError)
     async def handle_gateway_service_error(
