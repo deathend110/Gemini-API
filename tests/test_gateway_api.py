@@ -1,10 +1,14 @@
+import contextlib
+import io
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from gateway.config import GatewaySettings
-from gateway.main import create_app
+from gateway.main import create_app, main
+from gateway.schemas import ChatMessage, ChatToolCall, ChatToolFunction
+from gemini_webapi.exceptions import TimeoutError
 
 class TestGatewayApi(unittest.TestCase):
     def setUp(self) -> None:
@@ -94,6 +98,257 @@ class TestGatewayApi(unittest.TestCase):
         self.assertEqual(body["choices"][0]["message"]["role"], "assistant")
         self.assertEqual(body["choices"][0]["message"]["content"], "stub reply")
         self.assertEqual(body["choices"][0]["finish_reason"], "stop")
+
+    def test_streaming_chat_returns_done_marker(self) -> None:
+        async def fake_generate_stream(*args, **kwargs):
+            yield "stub "
+            yield "reply"
+
+        payload = {
+            "model": "gemini-3.5-flash",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        }
+
+        with patch.object(
+            self.app.state.gateway_service,
+            "generate_stream",
+            new=fake_generate_stream,
+        ):
+            with self.client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            ) as response:
+                chunks = list(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any("data: [DONE]" in chunk for chunk in chunks))
+
+    def test_tool_call_response_uses_openai_tool_calls_shape(self) -> None:
+        payload = {
+            "model": "gemini-3.5-flash",
+            "messages": [{"role": "user", "content": "帮我查深圳天气"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "获取天气",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "city": {"type": "string"},
+                            },
+                            "required": ["city"],
+                        },
+                    },
+                }
+            ],
+        }
+
+        with patch.object(
+            self.app.state.gateway_service,
+            "generate_text",
+            new=AsyncMock(
+                return_value='{"tool_calls":[{"name":"get_weather","arguments":{"city":"深圳"}}]}'
+            ),
+        ):
+            response = self.client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        message = response.json()["choices"][0]["message"]
+        self.assertEqual(message["content"], "")
+        self.assertEqual(message["tool_calls"][0]["type"], "function")
+        self.assertEqual(message["tool_calls"][0]["function"]["name"], "get_weather")
+        self.assertEqual(
+            message["tool_calls"][0]["function"]["arguments"],
+            '{"city":"深圳"}',
+        )
+        self.assertEqual(response.json()["choices"][0]["finish_reason"], "tool_calls")
+
+    def test_data_image_input_is_forwarded_to_service_chain(self) -> None:
+        captured = {}
+
+        async def fake_generate_text(*args, **kwargs):
+            captured["files"] = kwargs.get("files")
+            return "image ok"
+
+        payload = {
+            "model": "gemini-3.5-flash",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请描述图片"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2pW8QAAAAASUVORK5CYII="
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+
+        with patch.object(
+            self.app.state.gateway_service,
+            "generate_text",
+            new=fake_generate_text,
+        ):
+            response = self.client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(captured["files"]), 1)
+
+    def test_extra_body_files_is_forwarded_to_service_chain(self) -> None:
+        captured = {}
+
+        async def fake_generate_text(*args, **kwargs):
+            captured["files"] = kwargs.get("files")
+            return "file ok"
+
+        payload = {
+            "model": "gemini-3.5-flash",
+            "messages": [{"role": "user", "content": "请总结附件"}],
+            "extra_body": {
+                "files": [
+                    {
+                        "name": "note.txt",
+                        "content_type": "text/plain",
+                        "data_base64": "aGVsbG8gd29ybGQ=",
+                    }
+                ]
+            },
+        }
+
+        with patch.object(
+            self.app.state.gateway_service,
+            "generate_text",
+            new=fake_generate_text,
+        ):
+            response = self.client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(captured["files"]), 1)
+
+    def test_invalid_reasoning_effort_returns_structured_error(self) -> None:
+        payload = {
+            "model": "gemini-3.5-flash",
+            "reasoning_effort": "turbo",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.settings.api_key}"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "invalid_reasoning_effort")
+
+    def test_upstream_timeout_returns_structured_error(self) -> None:
+        payload = {
+            "model": "gemini-3.5-flash",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        with patch.object(
+            self.app.state.gateway_service,
+            "generate_text",
+            new=AsyncMock(side_effect=TimeoutError("timeout")),
+        ):
+            response = self.client.post(
+                "/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.settings.api_key}"},
+            )
+
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.json()["error"]["code"], "upstream_timeout")
+
+    def test_invalid_extra_body_files_returns_structured_error(self) -> None:
+        payload = {
+            "model": "gemini-3.5-flash",
+            "messages": [{"role": "user", "content": "请总结附件"}],
+            "extra_body": {
+                "files": [
+                    {
+                        "name": "note.txt",
+                        "content_type": "text/plain",
+                        "data_base64": "%%%invalid%%%",
+                    }
+                ]
+            },
+        }
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.settings.api_key}"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "file_decode_failed")
+
+    def test_build_prompt_preserves_tool_call_history(self) -> None:
+        prompt = self.app.state.gateway_service.build_prompt_from_messages(
+            messages=[
+                ChatMessage(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatToolCall(
+                            id="call_123",
+                            function=ChatToolFunction(
+                                name="get_weather",
+                                arguments='{"city":"深圳"}',
+                            ),
+                        )
+                    ],
+                ),
+                ChatMessage(
+                    role="tool",
+                    tool_call_id="call_123",
+                    content="晴天 28 度",
+                ),
+                ChatMessage(role="user", content="继续"),
+            ]
+        )
+
+        self.assertIn("get_weather", prompt)
+        self.assertIn("call_123", prompt)
+        self.assertIn("晴天 28 度", prompt)
+
+    def test_main_prints_startup_summary(self) -> None:
+        stdout = io.StringIO()
+
+        with (
+            patch("gateway.main.GatewaySettings", return_value=GatewaySettings(api_key="demo-key")),
+            patch("uvicorn.run") as run_mock,
+            contextlib.redirect_stdout(stdout),
+        ):
+            main()
+
+        output = stdout.getvalue()
+        self.assertIn("Base URL: http://127.0.0.1:8000/v1", output)
+        self.assertIn("API Key: demo-key", output)
+        run_mock.assert_called_once()
 
 
 if __name__ == "__main__":

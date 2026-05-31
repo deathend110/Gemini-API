@@ -13,6 +13,19 @@ class ChatContentPart(BaseModel):
     image_url: dict[str, Any] | None = None
 
 
+class ChatToolFunction(BaseModel):
+    name: str
+    description: str | None = None
+    arguments: str | None = None
+    parameters: dict[str, Any] | None = None
+
+
+class ChatToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    function: ChatToolFunction
+
+
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -20,6 +33,7 @@ class ChatMessage(BaseModel):
     content: str | list[ChatContentPart] | None
     tool_call_id: str | None = None
     name: str | None = None
+    tool_calls: list[ChatToolCall] | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -51,12 +65,13 @@ class ModelListResponse(BaseModel):
 class ChatCompletionResponseMessage(BaseModel):
     role: str
     content: str | None
+    tool_calls: list[ChatToolCall] | None = None
 
 
 class ChatCompletionChoice(BaseModel):
     index: int
     message: ChatCompletionResponseMessage
-    finish_reason: str
+    finish_reason: str | None
 
 
 class ChatCompletionUsage(BaseModel):

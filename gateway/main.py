@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from gateway.auth import build_bearer_verifier
 from gateway.config import GatewaySettings
-from gateway.schemas import ChatCompletionRequest, ChatCompletionResponse, ModelListResponse
+from gateway.schemas import ChatCompletionRequest, ModelListResponse
 from gateway.service import GatewayService, GatewayServiceError
 
 
@@ -49,23 +49,58 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     @app.post(
         "/v1/chat/completions",
         dependencies=[Depends(verify_bearer)],
-        response_model=ChatCompletionResponse,
     )
     async def create_chat_completions(
         payload: ChatCompletionRequest,
         service: Any = Depends(get_gateway_service),
     ) -> Any:
+        if payload.stream:
+            return StreamingResponse(
+                service.stream_chat_completion(payload),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         return await service.create_chat_completion(payload)
 
     @app.post(
         "/chat/completions",
         dependencies=[Depends(verify_bearer)],
-        response_model=ChatCompletionResponse,
     )
     async def create_chat_completions_alias(
         payload: ChatCompletionRequest,
         service: Any = Depends(get_gateway_service),
     ) -> Any:
+        if payload.stream:
+            return StreamingResponse(
+                service.stream_chat_completion(payload),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         return await service.create_chat_completion(payload)
 
     return app
+
+
+def main() -> None:
+    import uvicorn
+
+    settings = GatewaySettings()
+    print(f"Base URL: http://{settings.host}:{settings.port}/v1")
+    print(f"API Key: {settings.api_key}")
+    print(f"Default model: {settings.default_model}")
+    print(f"Default reasoning effort: {settings.default_reasoning_effort}")
+    uvicorn.run(
+        create_app(settings=settings),
+        host=settings.host,
+        port=settings.port,
+    )
+
+
+if __name__ == "__main__":
+    main()

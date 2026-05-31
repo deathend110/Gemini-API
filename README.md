@@ -40,9 +40,18 @@ A reverse-engineered asynchronous Python wrapper for the [Google Gemini](https:/
 - **Official Flavor** - Provides a simple and elegant interface inspired by [Google Generative AI](https://ai.google.dev/tutorials/python_quickstart)'s official API.
 - **Asynchronous** - Utilizes `asyncio` to run generation tasks and return outputs efficiently.
 
+## OpenAI-compatible Gateway
+
+This repository also includes a local OpenAI-compatible gateway under [`gateway/`](gateway/README.md) for tools such as AstrBot and Fitness Agent.
+
+- Endpoints: `/v1/models`, `/v1/chat/completions`, `/chat/completions`
+- V1 capabilities: streaming SSE, tools, image input, and `extra_body.files`
+- Chinese setup and integration guide: [`gateway/README.md`](gateway/README.md)
+
 ## Table of Contents
 
 - [Features](#features)
+- [OpenAI-compatible Gateway](#openai-compatible-gateway)
 - [Table of Contents](#table-of-contents)
 - [Installation](#installation)
 - [Authentication](#authentication)
