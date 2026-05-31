@@ -46,6 +46,30 @@ RecoverableGeminiError = gateway_service_module.GeminiError
 RecoverableTimeoutError = gateway_service_module.TimeoutError
 
 
+class FakeCookie:
+    def __init__(self, name: str, value: str) -> None:
+        self.name = name
+        self.value = value
+        self.domain = ".google.com"
+        self.path = "/"
+        self.expires = None
+
+    def is_expired(self) -> bool:
+        return False
+
+
+class FakeCookies:
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = dict(values)
+
+    @property
+    def jar(self) -> list[FakeCookie]:
+        return [FakeCookie(name, value) for name, value in self._values.items()]
+
+    def to_dict(self) -> dict[str, str]:
+        return dict(self._values)
+
+
 class FakeGeminiClient:
     def __init__(
         self,
@@ -56,6 +80,10 @@ class FakeGeminiClient:
         generate_error: Exception | None = None,
         stream_error: Exception | None = None,
         stream_error_after_chunks: int | None = None,
+        cookie_overrides: dict[str, str] | None = None,
+        inspect_snapshot: dict[str, object] | None = None,
+        account_status_name: str = "AVAILABLE",
+        account_status_code: int = 1000,
     ) -> None:
         self.init_calls: list[dict[str, object]] = []
         self.close_calls = 0
@@ -67,6 +95,28 @@ class FakeGeminiClient:
         self.generate_error = generate_error
         self.stream_error = stream_error
         self.stream_error_after_chunks = stream_error_after_chunks
+        self.cookies = FakeCookies(
+            {
+                "__Secure-1PSID": "psid-value",
+                "__Secure-1PSIDTS": "psidts-value",
+                "NID": "nid-value",
+                **(cookie_overrides or {}),
+            }
+        )
+        self.inspect_snapshot = inspect_snapshot or {
+            "summary": {"deep_research_feature_present": True, "rejected_probes": []}
+        }
+        self.account_status = SimpleNamespace(
+            name=account_status_name,
+            value=account_status_code,
+        )
+        self._model_registry = {
+            "basic": SimpleNamespace(advanced_only=False, is_available=True),
+            "advanced": SimpleNamespace(
+                advanced_only=account_status_name == "AVAILABLE",
+                is_available=account_status_name == "AVAILABLE",
+            ),
+        }
 
     async def init(self, **kwargs) -> None:
         self.init_calls.append(kwargs)
@@ -74,6 +124,9 @@ class FakeGeminiClient:
             error = self.init_error
             self.init_error = None
             raise error
+
+    async def inspect_account_status(self) -> dict[str, object]:
+        return self.inspect_snapshot
 
     async def close(self) -> None:
         self.close_calls += 1
@@ -168,6 +221,30 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIs(rebuilt_client, second_client)
         self.assertEqual(service._build_client_from_cached_cookies.call_count, 2)
 
+    async def test_shutdown_persists_updated_cookies_to_json(self) -> None:
+        service = GatewayService(self.settings)
+        fake_client = FakeGeminiClient(
+            cookie_overrides={
+                "__Secure-1PSIDTS": "new-psidts-value",
+                "SIDCC": "sidcc-value",
+            }
+        )
+        service._build_client_from_cached_cookies = Mock(return_value=fake_client)
+
+        await service.warmup()
+        await service.shutdown()
+
+        persisted = json.loads(self.cookies_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            persisted["cookies"]["__Secure-1PSIDTS"],
+            "new-psidts-value",
+        )
+        self.assertEqual(persisted["cookies"]["SIDCC"], "sidcc-value")
+        self.assertEqual(
+            service.get_cached_cookies()["__Secure-1PSIDTS"],
+            "new-psidts-value",
+        )
+
     async def test_get_cached_cookies_does_not_reload_file_after_warmup(self) -> None:
         service = GatewayService(self.settings)
         service._build_client_from_cached_cookies = Mock(return_value=FakeGeminiClient())
@@ -180,6 +257,59 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(load_mock.call_count, 1)
         self.assertEqual(first, second)
         self.assertEqual(first["__Secure-1PSID"], "psid-value")
+
+    async def test_warmup_builds_account_snapshot_from_probe_results(self) -> None:
+        service = GatewayService(self.settings)
+        fake_client = FakeGeminiClient(
+            inspect_snapshot={
+                "summary": {
+                    "deep_research_feature_present": False,
+                    "rejected_probes": ["caps"],
+                }
+            },
+            account_status_name="UNAUTHENTICATED",
+            account_status_code=1016,
+        )
+        service._build_client_from_cached_cookies = Mock(return_value=fake_client)
+
+        await service.warmup()
+
+        snapshot = service.get_account_snapshot()
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.mode, "degraded")
+        self.assertEqual(snapshot.raw_account_status, "UNAUTHENTICATED")
+        self.assertEqual(snapshot.raw_account_status_code, 1016)
+        self.assertTrue(snapshot.chat_available)
+        self.assertFalse(snapshot.deep_research_available)
+        self.assertFalse(snapshot.full_web_capability_available)
+
+    async def test_warmup_strict_mode_raises_when_required_level_missing(self) -> None:
+        strict_settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            account_strict_mode=True,
+            account_required_level="full_web",
+        )
+        service = GatewayService(strict_settings)
+        fake_client = FakeGeminiClient(
+            inspect_snapshot={
+                "summary": {
+                    "deep_research_feature_present": False,
+                    "rejected_probes": ["caps"],
+                }
+            },
+            account_status_name="UNAUTHENTICATED",
+            account_status_code=1016,
+        )
+        service._build_client_from_cached_cookies = Mock(return_value=fake_client)
+
+        with self.assertRaisesRegex(ValueError, "full_web"):
+            await service.warmup()
+
+        self.assertEqual(fake_client.close_calls, 1)
+        self.assertFalse(service._is_warmed_up)
+        self.assertIsNone(service.get_account_snapshot())
 
     async def test_generate_methods_reuse_shared_client(self) -> None:
         service = GatewayService(self.settings)

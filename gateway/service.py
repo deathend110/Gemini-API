@@ -9,6 +9,11 @@ from typing import Any, AsyncGenerator, TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
+from gateway.account import (
+    GatewayAccountSnapshot,
+    evaluate_account_mode,
+    validate_required_account_level,
+)
 from gateway.config import GatewaySettings
 from gateway.files import cleanup_prepared_files, prepare_request_files
 from gateway.schemas import (
@@ -70,6 +75,7 @@ class GatewayService:
             for model in CANONICAL_MODELS
         }
         self._cached_cookies: dict[str, str] | None = None
+        self._account_snapshot: GatewayAccountSnapshot | None = None
         self._shared_client: GeminiClient | None = None
         self._shared_client_generation = 0
         self._active_client_refs: dict[int, int] = {}
@@ -141,6 +147,9 @@ class GatewayService:
             self._cached_cookies = self.load_cookies()
         return self._cached_cookies
 
+    def get_account_snapshot(self) -> GatewayAccountSnapshot | None:
+        return self._account_snapshot
+
     def _extract_cookies(self, raw_data: Any) -> dict[str, str]:
         if isinstance(raw_data, dict) and isinstance(raw_data.get("cookies"), dict):
             return {
@@ -167,6 +176,76 @@ class GatewayService:
             code="missing_cookies",
             status_code=500,
         )
+
+    def _serialize_cookies_for_json(self, cookies: Any) -> dict[str, str]:
+        if cookies is None:
+            return {}
+
+        if isinstance(cookies, dict):
+            return {
+                name: value
+                for name, value in cookies.items()
+                if isinstance(name, str) and isinstance(value, str)
+            }
+
+        to_dict = getattr(cookies, "to_dict", None)
+        if callable(to_dict):
+            serialized = to_dict()
+            if isinstance(serialized, dict):
+                return {
+                    name: value
+                    for name, value in serialized.items()
+                    if isinstance(name, str) and isinstance(value, str)
+                }
+
+        items = getattr(cookies, "items", None)
+        if callable(items):
+            return {
+                name: value
+                for name, value in items()
+                if isinstance(name, str) and isinstance(value, str)
+            }
+
+        jar = getattr(cookies, "jar", None)
+        if jar is not None:
+            serialized: dict[str, str] = {}
+            for cookie in jar:
+                name = getattr(cookie, "name", None)
+                value = getattr(cookie, "value", None)
+                if isinstance(name, str) and isinstance(value, str):
+                    serialized[name] = value
+            return serialized
+
+        if isinstance(cookies, list):
+            return self._cookies_from_list(cookies)
+
+        return {}
+
+    def persist_cookies(self, cookies: Any, *, force: bool = False) -> None:
+        if not force and not self.settings.cookie_persist_enabled:
+            return
+
+        serialized = self._serialize_cookies_for_json(cookies)
+        if self._cached_cookies:
+            for name, value in self._cached_cookies.items():
+                serialized.setdefault(name, value)
+
+        if "__Secure-1PSID" not in serialized:
+            raise GatewayServiceError(
+                message="Cannot persist cookies without __Secure-1PSID.",
+                code="cookie_persist_failed",
+                status_code=500,
+            )
+
+        payload = {
+            "cookies": dict(sorted(serialized.items())),
+            "updated_at": int(time.time()),
+        }
+        Path(self.settings.cookies_json_path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._cached_cookies = dict(payload["cookies"])
 
     def _cookies_from_list(self, cookie_items: list[Any]) -> dict[str, str]:
         cookies: dict[str, str] = {}
@@ -706,21 +785,43 @@ class GatewayService:
                 return
 
             client = self._shared_client or self._build_client_from_cached_cookies()
-            await self._init_shared_client(client)
+            try:
+                await self._init_shared_client(client)
+            except Exception:
+                self._shared_client = None
+                self._account_snapshot = None
+                self._is_warmed_up = False
+                await client.close()
+                raise
 
     async def shutdown(self) -> None:
         async with self._shared_client_lock:
             client = self._shared_client
             generation = self._shared_client_generation
             self._shared_client = None
+            self._account_snapshot = None
             self._is_warmed_up = False
             clients_to_close = self._collect_releasable_retired_clients_locked()
             current_client_to_close = self._retire_client_locked(generation, client)
             if current_client_to_close is not None:
                 clients_to_close.append(current_client_to_close)
 
+        shutdown_error: Exception | None = None
+        if client is not None:
+            try:
+                self.persist_cookies(getattr(client, "cookies", None), force=True)
+            except Exception as exc:
+                shutdown_error = exc
+
         for current_client in clients_to_close:
-            await current_client.close()
+            try:
+                await current_client.close()
+            except Exception as exc:
+                if shutdown_error is None:
+                    shutdown_error = exc
+
+        if shutdown_error is not None:
+            raise shutdown_error
 
     async def get_shared_client(self) -> GeminiClient:
         await self.warmup()
@@ -736,21 +837,108 @@ class GatewayService:
         return self._build_client_from_cached_cookies()
 
     async def _init_shared_client(self, client: GeminiClient) -> GeminiClient:
-        try:
-            await client.init(
-                timeout=self.settings.request_timeout,
-                auto_refresh=True,
-                auto_close=False,
+        await client.init(
+            timeout=self.settings.request_timeout,
+            auto_refresh=True,
+            auto_close=False,
+        )
+        snapshot = await self._build_account_snapshot(client)
+        if self.settings.account_strict_mode:
+            validate_required_account_level(
+                snapshot,
+                self.settings.account_required_level,
             )
-        except Exception:
-            self._shared_client = None
-            self._is_warmed_up = False
-            raise
 
         self._shared_client_generation += 1
         self._shared_client = client
+        self._account_snapshot = snapshot
         self._is_warmed_up = True
         return client
+
+    async def _build_account_snapshot(
+        self,
+        client: GeminiClient,
+    ) -> GatewayAccountSnapshot:
+        raw_status = getattr(client, "account_status", None)
+        raw_name = getattr(raw_status, "name", "UNKNOWN")
+        raw_code = getattr(raw_status, "value", None)
+
+        probe: dict[str, Any] = {}
+        if self.settings.account_probe_enabled:
+            probe_result = await client.inspect_account_status()
+            if isinstance(probe_result, dict):
+                probe = probe_result
+
+        summary = probe.get("summary", {}) if isinstance(probe, dict) else {}
+        rejected_probes = summary.get("rejected_probes", [])
+        if not isinstance(rejected_probes, list):
+            rejected_probes = []
+
+        chat_available = raw_name not in {
+            "LOCATION_REJECTED",
+            "ACCOUNT_REJECTED",
+            "ACCESS_TEMPORARILY_UNAVAILABLE",
+            "ACCOUNT_REJECTED_BY_GUARDIAN",
+            "GUARDIAN_APPROVAL_REQUIRED",
+        }
+        advanced_models_available = self._detect_advanced_models_available(
+            client,
+            raw_name,
+        )
+        deep_research_available = bool(
+            summary.get("deep_research_feature_present", False)
+        )
+        full_web_capability_available = (
+            chat_available
+            and advanced_models_available
+            and deep_research_available
+            and not rejected_probes
+        )
+
+        unavailable_reasons: list[str] = []
+        if not chat_available:
+            unavailable_reasons.append("chat_unavailable")
+        if not advanced_models_available:
+            unavailable_reasons.append("advanced_models_unavailable")
+        if not deep_research_available:
+            unavailable_reasons.append("deep_research_unavailable")
+        unavailable_reasons.extend(
+            f"probe_rejected:{probe_name}"
+            for probe_name in rejected_probes
+            if isinstance(probe_name, str)
+        )
+
+        snapshot = GatewayAccountSnapshot(
+            raw_account_status=raw_name,
+            raw_account_status_code=raw_code if isinstance(raw_code, int) else None,
+            chat_available=chat_available,
+            advanced_models_available=advanced_models_available,
+            deep_research_available=deep_research_available,
+            full_web_capability_available=full_web_capability_available,
+            mode="unknown",
+            unavailable_reasons=unavailable_reasons,
+        )
+        return evaluate_account_mode(snapshot)
+
+    def _detect_advanced_models_available(
+        self,
+        client: GeminiClient,
+        raw_status_name: str,
+    ) -> bool:
+        registry = getattr(client, "_model_registry", None)
+        if isinstance(registry, dict) and registry:
+            advanced_candidates = [
+                model
+                for model in registry.values()
+                if getattr(model, "advanced_only", False)
+            ]
+            if advanced_candidates:
+                return any(
+                    bool(getattr(model, "is_available", False))
+                    for model in advanced_candidates
+                )
+
+        return raw_status_name == "AVAILABLE"
 
     async def _acquire_shared_client(self) -> tuple[GeminiClient, int]:
         await self.warmup()
@@ -812,6 +1000,7 @@ class GatewayService:
                 rebuilt_client_to_close = client
                 if self._shared_client is failed_client:
                     self._shared_client = None
+                    self._account_snapshot = None
                     self._is_warmed_up = False
                 client_to_close = self._retire_client_locked(
                     failed_generation,
