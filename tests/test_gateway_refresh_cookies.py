@@ -4,7 +4,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from gateway.config import GatewaySettings
 from gateway.refresh_cookies import (
@@ -14,6 +14,7 @@ from gateway.refresh_cookies import (
     build_manual_chrome_launch_command,
     collect_google_cookies,
     load_browser_cookies_from_profile,
+    load_browser_cookies_via_cdp,
     load_devtools_endpoint_from_profile,
     main,
     print_manual_login_guidance,
@@ -223,7 +224,7 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             r"C:\Users\27355\.gemini-api\selenium-profile\Local State",
         )
         self.assertEqual(captured["domain_name"], ".google.com")
-        self.assertEqual(selection.source, "manual-chrome-profile")
+        self.assertEqual(selection.source, "manual-chrome-profile-cdp")
         self.assertEqual(selection.cookies["__Secure-1PSID"], "psid")
         self.assertEqual(selection.cookies["__Secure-1PSIDTS"], "psidts")
 
@@ -243,6 +244,58 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 )
 
         self.assertTrue(ctx.exception.manual_login_required)
+
+    def test_load_browser_cookies_via_cdp_extracts_live_google_auth_cookies(
+        self,
+    ) -> None:
+        endpoint = DevToolsEndpoint(
+            port=58472,
+            browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+            version_url="http://127.0.0.1:58472/json/version",
+        )
+        fake_ws = Mock()
+        fake_ws.recv_json.side_effect = [
+            {
+                "id": 1,
+                "result": {
+                    "cookies": [
+                        {
+                            "name": "__Secure-1PSID",
+                            "value": "live-psid",
+                            "domain": ".google.com",
+                        },
+                        {
+                            "name": "__Secure-1PSIDTS",
+                            "value": "live-psidts",
+                            "domain": ".google.com",
+                        },
+                        {
+                            "name": "NID",
+                            "value": "ignore-me",
+                            "domain": ".example.com",
+                        },
+                    ]
+                },
+            }
+        ]
+        fake_session = Mock()
+        fake_session.ws_connect.return_value = fake_ws
+
+        selection = load_browser_cookies_via_cdp(
+            endpoint=endpoint,
+            session_factory=lambda: fake_session,
+        )
+
+        fake_session.ws_connect.assert_called_once_with(
+            "ws://127.0.0.1:58472/devtools/browser/1234"
+        )
+        fake_ws.send_json.assert_called_once_with(
+            {"id": 1, "method": "Storage.getCookies"}
+        )
+        self.assertEqual(selection.source, "manual-chrome-profile-cdp")
+        self.assertEqual(selection.cookies["__Secure-1PSID"], "live-psid")
+        self.assertEqual(selection.cookies["__Secure-1PSIDTS"], "live-psidts")
+        self.assertNotIn("NID", selection.cookies)
 
     def test_print_manual_login_guidance_outputs_copyable_pwsh_command(self) -> None:
         stdout = StringIO()
@@ -276,9 +329,16 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             stdout = StringIO()
 
             with patch(
-                "gateway.refresh_cookies.load_browser_cookies_from_profile",
+                "gateway.refresh_cookies.load_devtools_endpoint_from_profile",
+                return_value=DevToolsEndpoint(
+                    port=58472,
+                    browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+                    version_url="http://127.0.0.1:58472/json/version",
+                ),
+            ), patch(
+                "gateway.refresh_cookies.load_browser_cookies_via_cdp",
                 return_value=BrowserCookieSelection(
-                    source="manual-chrome-profile",
+                    source="manual-chrome-profile-cdp",
                     cookies={
                         "__Secure-1PSID": "secret-psid",
                         "__Secure-1PSIDTS": "secret-psidts",
@@ -292,17 +352,17 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 )
 
             payload = json.loads(cookies_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["source"], "manual-chrome-profile")
+            self.assertEqual(payload["source"], "manual-chrome-profile-cdp")
             self.assertEqual(payload["cookies"]["__Secure-1PSID"], "secret-psid")
             self.assertEqual(
                 payload["cookies"]["__Secure-1PSIDTS"],
                 "secret-psidts",
             )
-            self.assertEqual(result.source, "manual-chrome-profile")
+            self.assertEqual(result.source, "manual-chrome-profile-cdp")
 
             output = stdout.getvalue()
             self.assertIn("Browser cookies refreshed:", output)
-            self.assertIn("source=manual-chrome-profile", output)
+            self.assertIn("source=manual-chrome-profile-cdp", output)
             self.assertIn("has_1psid=true", output)
             self.assertNotIn("secret-psid", output)
             self.assertNotIn("secret-psidts", output)
@@ -315,6 +375,53 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 )
             )
             self.assertEqual(service.load_cookies()["__Secure-1PSID"], "secret-psid")
+
+    def test_refresh_browser_cookies_to_file_uses_live_cdp_cookies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookies_path = Path(temp_dir) / "cookies.json"
+            stdout = StringIO()
+
+            with patch(
+                "gateway.refresh_cookies.load_devtools_endpoint_from_profile",
+                return_value=DevToolsEndpoint(
+                    port=58472,
+                    browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+                    version_url="http://127.0.0.1:58472/json/version",
+                ),
+            ) as load_endpoint, patch(
+                "gateway.refresh_cookies.load_browser_cookies_via_cdp",
+                return_value=BrowserCookieSelection(
+                    source="manual-chrome-profile-cdp",
+                    cookies={
+                        "__Secure-1PSID": "live-psid",
+                        "__Secure-1PSIDTS": "live-psidts",
+                    },
+                ),
+            ) as load_cdp, patch(
+                "gateway.refresh_cookies.load_browser_cookies_from_profile",
+                side_effect=AssertionError(
+                    "refresh_browser_cookies_to_file should not use the profile SQLite path"
+                ),
+            ), redirect_stdout(stdout):
+                selection = refresh_browser_cookies_to_file(
+                    cookies_path,
+                    profile_dir=Path(temp_dir) / "selenium-profile",
+                )
+
+            load_endpoint.assert_called_once_with(Path(temp_dir) / "selenium-profile")
+            load_cdp.assert_called_once()
+
+            payload = json.loads(cookies_path.read_text(encoding="utf-8"))
+            self.assertEqual(selection.source, "manual-chrome-profile-cdp")
+            self.assertEqual(payload["source"], "manual-chrome-profile-cdp")
+            self.assertEqual(payload["cookies"]["__Secure-1PSID"], "live-psid")
+            self.assertEqual(payload["cookies"]["__Secure-1PSIDTS"], "live-psidts")
+
+            output = stdout.getvalue()
+            self.assertIn("Browser cookies refreshed:", output)
+            self.assertIn("source=manual-chrome-profile-cdp", output)
+            self.assertNotIn("live-psid", output)
+            self.assertNotIn("live-psidts", output)
 
     def test_refresh_browser_cookies_does_not_overwrite_existing_file_when_invalid(
         self,
@@ -345,6 +452,41 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 ],
                 "old-psid",
             )
+
+    def test_load_browser_cookies_via_cdp_requires_live_gemini_login_when_1psid_missing(
+        self,
+    ) -> None:
+        endpoint = DevToolsEndpoint(
+            port=58472,
+            browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+            version_url="http://127.0.0.1:58472/json/version",
+        )
+        fake_ws = Mock()
+        fake_ws.recv_json.return_value = {
+            "id": 1,
+            "result": {
+                "cookies": [
+                    {
+                        "name": "__Secure-1PSIDTS",
+                        "value": "live-psidts",
+                        "domain": ".google.com",
+                    }
+                ]
+            },
+        }
+        fake_session = Mock()
+        fake_session.ws_connect.return_value = fake_ws
+
+        with self.assertRaisesRegex(
+            BrowserCookieRefreshError,
+            "未检测到有效 Gemini 登录态",
+        ) as ctx:
+            load_browser_cookies_via_cdp(
+                endpoint=endpoint,
+                session_factory=lambda: fake_session,
+            )
+
+        self.assertTrue(ctx.exception.manual_login_required)
 
     def test_load_browser_cookies_from_profile_errors_when_cookie_never_appears(
         self,

@@ -9,9 +9,11 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
+from curl_cffi.requests import Session
+
 
 MANUAL_GEMINI_URL = "https://gemini.google.com/app"
-DEFAULT_BROWSER_SOURCE = "manual-chrome-profile"
+DEFAULT_BROWSER_SOURCE = "manual-chrome-profile-cdp"
 
 
 class BrowserCookieRefreshError(Exception):
@@ -132,6 +134,15 @@ def collect_google_cookies(items: list[dict[str, Any]]) -> dict[str, str]:
     return cookies
 
 
+def _select_google_auth_cookies(cookies: dict[str, str]) -> dict[str, str]:
+    selected: dict[str, str] = {}
+    for name in ("__Secure-1PSID", "__Secure-1PSIDTS"):
+        value = cookies.get(name)
+        if isinstance(value, str) and value:
+            selected[name] = value
+    return selected
+
+
 def _profile_cookie_file(profile_dir: str | Path) -> Path:
     return Path(profile_dir) / "Default" / "Network" / "Cookies"
 
@@ -164,6 +175,10 @@ def _default_browser_loader() -> Callable[..., Any]:
         ) from exc
 
     return bc3.chrome
+
+
+def _default_devtools_session_factory() -> Session:
+    return Session()
 
 
 def _normalize_browser_cookie_item(cookie: Any) -> dict[str, str] | None:
@@ -238,6 +253,50 @@ def load_browser_cookies_from_profile(
     )
 
 
+def load_browser_cookies_via_cdp(
+    *,
+    endpoint: DevToolsEndpoint,
+    session_factory: Callable[[], Any] | None = None,
+) -> BrowserCookieSelection:
+    session = (
+        session_factory() if session_factory is not None else _default_devtools_session_factory()
+    )
+    websocket = None
+    try:
+        websocket = session.ws_connect(endpoint.browser_websocket_url)
+        websocket.send_json({"id": 1, "method": "Storage.getCookies"})
+        response = websocket.recv_json()
+    except BrowserCookieRefreshError:
+        raise
+    except Exception as exc:
+        raise BrowserCookieRefreshError(
+            f"Failed to query Chrome DevTools cookies: {exc}"
+        ) from exc
+    finally:
+        if websocket is not None:
+            websocket.close()
+        close = getattr(session, "close", None)
+        if callable(close):
+            close()
+
+    result = response.get("result") if isinstance(response, dict) else None
+    cookie_items = result.get("cookies") if isinstance(result, dict) else None
+    if not isinstance(cookie_items, list):
+        raise BrowserCookieRefreshError("Chrome DevTools 返回的 cookies 结构无效。")
+
+    cookies = _select_google_auth_cookies(collect_google_cookies(cookie_items))
+    if "__Secure-1PSID" not in cookies:
+        raise BrowserCookieRefreshError(
+            "已连接专用 Chrome，但未检测到有效 Gemini 登录态。",
+            manual_login_required=True,
+        )
+
+    return BrowserCookieSelection(
+        source=DEFAULT_BROWSER_SOURCE,
+        cookies=cookies,
+    )
+
+
 def print_manual_login_guidance(
     *,
     profile_dir: str | Path,
@@ -283,7 +342,8 @@ def refresh_browser_cookies_to_file(
     del verbose
 
     path = Path(cookies_path)
-    selection = load_browser_cookies_from_profile(profile_dir=profile_dir)
+    endpoint = load_devtools_endpoint_from_profile(profile_dir)
+    selection = load_browser_cookies_via_cdp(endpoint=endpoint)
     payload = {
         "cookies": dict(sorted(selection.cookies.items())),
         "updated_at": int(time.time()),
