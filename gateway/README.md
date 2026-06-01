@@ -19,11 +19,17 @@
 
 ### 1.1 安装依赖
 
-在仓库根目录安装项目依赖：
+本仓库使用 `uv` 管理本地虚拟环境和依赖。首次运行或依赖变更后，在仓库根目录执行：
 
-```bash
-pip install -e .
+```powershell
+uv sync
 ```
+
+说明：
+
+- `uv sync` 会按 `pyproject.toml` 和 `uv.lock` 创建或更新仓库内 `.venv`
+- 后续启动统一使用 `uv run ...`，不要直接调用 conda/base 环境里的 `python`
+- 如果只运行网关，通常不需要手动激活 `.venv`
 
 ### 1.2 准备 Cookies
 
@@ -65,7 +71,7 @@ set GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL=basic
 - `GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL` 支持 `basic`、`standard`、`full_web`
 - `GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS` 必须为正整数
 
-也可以直接使用仓库内置脚本为当前 PowerShell 会话设置环境变量：
+推荐直接使用仓库内置脚本为当前 PowerShell 会话设置环境变量：
 
 ```powershell
 . .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
@@ -86,14 +92,23 @@ set GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL=basic
   -Port 8010
 ```
 
-或者在`set_gateway_env.ps1`内部设置好，直接powershell进入项目根目录运行. .\gateway\set_gateway_env.ps1
+或者在 `set_gateway_env.ps1` 内部设置好默认值，然后进入项目根目录运行 `. .\gateway\set_gateway_env.ps1`。
 
 ## 2. 启动网关
 
 在仓库根目录执行：
 
-```bash
-python -m gateway.main
+```powershell
+uv run python -m gateway.main
+```
+
+推荐的完整 PowerShell 启动流程：
+
+```powershell
+cd G:\VSCODE-G\Gemini-API
+uv sync
+. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
+uv run python -m gateway.main
 ```
 
 默认监听：
