@@ -1,5 +1,6 @@
-import json
 import asyncio
+import json
+import os
 import sys
 import tempfile
 import types
@@ -455,6 +456,70 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         service.refresh_cookies_from_browser.assert_called_once_with()
         self.assertEqual(service._build_client_from_cached_cookies.call_count, 2)
 
+    async def test_rebuild_can_preserve_browser_refreshed_auth_cookies(self) -> None:
+        service = GatewayService(self.settings)
+        service._cached_cookies = {
+            "__Secure-1PSID": "browser-psid",
+            "__Secure-1PSIDTS": "browser-fresh-psidts",
+        }
+        failed_client = FakeGeminiClient(
+            cookie_overrides={
+                "__Secure-1PSID": "stale-psid",
+                "__Secure-1PSIDTS": "stale-psidts",
+            }
+        )
+        service._shared_client = failed_client
+        service._shared_client_generation = 1
+
+        class RecordingGeminiClient:
+            def __init__(
+                self,
+                *,
+                secure_1psid: str,
+                secure_1psidts: str,
+                proxy: str,
+            ) -> None:
+                self.secure_1psid = secure_1psid
+                self.secure_1psidts = secure_1psidts
+                self.proxy = proxy
+                self.cookies: dict[str, str] | None = None
+                self.account_status = SimpleNamespace(name="AVAILABLE", value=1000)
+                self._model_registry = {
+                    "advanced": SimpleNamespace(
+                        advanced_only=True,
+                        is_available=True,
+                    )
+                }
+
+            async def init(self, **kwargs) -> None:
+                self.init_calls = [kwargs]
+
+            async def inspect_account_status(self) -> dict[str, object]:
+                return {
+                    "summary": {
+                        "deep_research_feature_present": True,
+                        "rejected_probes": [],
+                    }
+                }
+
+            async def close(self) -> None:
+                self.close_calls = getattr(self, "close_calls", 0) + 1
+
+        active_gemini_module = sys.modules["gemini_webapi"]
+        with patch.object(
+            active_gemini_module,
+            "GeminiClient",
+            RecordingGeminiClient,
+        ):
+            rebuilt_client, _ = await service._rebuild_shared_client_after_failure(
+                failed_client=failed_client,
+                failed_generation=1,
+                sync_failed_client_cookies=False,
+            )
+
+        self.assertEqual(rebuilt_client.secure_1psid, "browser-psid")
+        self.assertEqual(rebuilt_client.secure_1psidts, "browser-fresh-psidts")
+
     async def test_auth_failure_browser_refresh_failure_returns_original_error(
         self,
     ) -> None:
@@ -506,6 +571,35 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(second_client.init_calls), 1)
         self.assertEqual(len(first_client.stream_calls), 1)
         self.assertEqual(len(second_client.stream_calls), 1)
+
+    async def test_flush_runtime_cookies_drops_stale_cached_cookie_values(self) -> None:
+        service = GatewayService(self.settings)
+        service._cached_cookies = {
+            "__Secure-1PSID": "psid-value",
+            "__Secure-1PSIDTS": "stale-psidts-value",
+            "NID": "stale-nid-value",
+        }
+        service._shared_client = FakeGeminiClient(
+            cookie_overrides={
+                "__Secure-1PSIDTS": "",
+                "NID": "",
+            }
+        )
+        service._shared_client.cookies = FakeCookies(
+            {
+                "__Secure-1PSID": "psid-value",
+            }
+        )
+
+        changed = await service.flush_runtime_cookies()
+
+        self.assertTrue(changed)
+        cached = service.get_cached_cookies()
+        self.assertEqual(cached["__Secure-1PSID"], "psid-value")
+        self.assertNotIn("__Secure-1PSIDTS", cached)
+        self.assertNotIn("NID", cached)
+        persisted = json.loads(self.cookies_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["cookies"], {"__Secure-1PSID": "psid-value"})
 
     async def test_generate_text_raises_when_rebuilt_client_fails_again(self) -> None:
         service = GatewayService(self.settings)
@@ -805,6 +899,40 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
             "atomic-psidts-value",
         )
         self.assertEqual(persisted["cookies"]["SIDCC"], "sidcc-value")
+
+    def test_load_cookies_prefers_newer_upstream_cookie_cache(self) -> None:
+        service = GatewayService(self.settings)
+        upstream_cache_dir = Path(self.temp_dir.name) / "gemini-cache"
+        upstream_cache_dir.mkdir(parents=True, exist_ok=True)
+        upstream_cache_path = upstream_cache_dir / ".cached_cookies_psid-value.json"
+        upstream_cache_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "__Secure-1PSID",
+                        "value": "psid-value",
+                        "domain": ".google.com",
+                        "path": "/",
+                        "expires": None,
+                    },
+                    {
+                        "name": "__Secure-1PSIDTS",
+                        "value": "new-upstream-psidts",
+                        "domain": ".google.com",
+                        "path": "/",
+                        "expires": None,
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        os.utime(upstream_cache_path, (self.cookies_path.stat().st_mtime + 10,) * 2)
+
+        with patch.dict(os.environ, {"GEMINI_COOKIE_PATH": str(upstream_cache_dir)}):
+            cookies = service.load_cookies()
+
+        self.assertEqual(cookies["__Secure-1PSID"], "psid-value")
+        self.assertEqual(cookies["__Secure-1PSIDTS"], "new-upstream-psidts")
 
 
 if __name__ == "__main__":

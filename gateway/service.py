@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import tempfile
 import time
 from typing import Any, AsyncGenerator, TYPE_CHECKING
 from urllib.error import HTTPError, URLError
@@ -121,6 +123,10 @@ class GatewayService:
             ) from exc
 
         cookies = self._extract_cookies(raw_data)
+        cookies = self._merge_with_newer_upstream_cookie_cache(
+            cookies=cookies,
+            cookies_path=cookies_path,
+        )
         if "__Secure-1PSID" not in cookies:
             raise GatewayServiceError(
                 message="Missing __Secure-1PSID in cookies JSON.",
@@ -295,9 +301,10 @@ class GatewayService:
         serialized: dict[str, str],
     ) -> dict[str, str]:
         merged = dict(serialized)
-        if self._cached_cookies:
-            for name, value in self._cached_cookies.items():
-                merged.setdefault(name, value)
+        if "__Secure-1PSID" not in merged and self._cached_cookies:
+            secure_1psid = self._cached_cookies.get("__Secure-1PSID")
+            if isinstance(secure_1psid, str) and secure_1psid:
+                merged["__Secure-1PSID"] = secure_1psid
         return merged
 
     def _sync_cached_cookies_from_client(self, client: GeminiClient) -> None:
@@ -764,13 +771,16 @@ class GatewayService:
                     return response.text
                 except Exception as exc:
                     if attempt == 0 and self._should_rebuild_shared_client(exc):
+                        refreshed_from_browser = False
                         if self._should_refresh_browser_cookies_after_error(exc):
-                            if not self.refresh_cookies_from_browser():
+                            refreshed_from_browser = self.refresh_cookies_from_browser()
+                            if not refreshed_from_browser:
                                 raise
                         rebuilt_client, rebuilt_generation = (
                             await self._rebuild_shared_client_after_failure(
                                 failed_client=client,
                                 failed_generation=generation,
+                                sync_failed_client_cookies=not refreshed_from_browser,
                             )
                         )
                         previous_generation = generation
@@ -808,13 +818,16 @@ class GatewayService:
                         and not yielded_any_chunk
                         and self._should_rebuild_shared_client(exc)
                     ):
+                        refreshed_from_browser = False
                         if self._should_refresh_browser_cookies_after_error(exc):
-                            if not self.refresh_cookies_from_browser():
+                            refreshed_from_browser = self.refresh_cookies_from_browser()
+                            if not refreshed_from_browser:
                                 raise
                         rebuilt_client, rebuilt_generation = (
                             await self._rebuild_shared_client_after_failure(
                                 failed_client=client,
                                 failed_generation=generation,
+                                sync_failed_client_cookies=not refreshed_from_browser,
                             )
                         )
                         previous_generation = generation
@@ -1040,6 +1053,8 @@ class GatewayService:
         self,
         failed_client: GeminiClient,
         failed_generation: int,
+        *,
+        sync_failed_client_cookies: bool = True,
     ) -> tuple[GeminiClient, int]:
         client_to_close: GeminiClient | None = None
         rebuilt_client_to_close: GeminiClient | None = None
@@ -1055,7 +1070,8 @@ class GatewayService:
                 )
                 return self._shared_client, generation
 
-            self._sync_cached_cookies_from_client(failed_client)
+            if sync_failed_client_cookies:
+                self._sync_cached_cookies_from_client(failed_client)
             client = self._build_client_from_cached_cookies()
             try:
                 await self._init_shared_client(client)
@@ -1123,6 +1139,48 @@ class GatewayService:
 
         self._cached_cookies = dict(selection.cookies)
         return True
+
+    def _merge_with_newer_upstream_cookie_cache(
+        self,
+        *,
+        cookies: dict[str, str],
+        cookies_path: Path,
+    ) -> dict[str, str]:
+        secure_1psid = cookies.get("__Secure-1PSID")
+        if not isinstance(secure_1psid, str) or not secure_1psid:
+            return cookies
+
+        cache_root = os.getenv("GEMINI_COOKIE_PATH")
+        cache_dir = (
+            Path(cache_root)
+            if cache_root
+            else Path(tempfile.gettempdir()) / "gemini_webapi"
+        )
+        upstream_cache_path = cache_dir / f".cached_cookies_{secure_1psid}.json"
+        if not upstream_cache_path.is_file():
+            return cookies
+
+        try:
+            upstream_stat = upstream_cache_path.stat()
+            cookies_stat = cookies_path.stat()
+        except OSError:
+            return cookies
+
+        if upstream_stat.st_mtime <= cookies_stat.st_mtime:
+            return cookies
+
+        try:
+            upstream_raw = json.loads(
+                upstream_cache_path.read_text(encoding="utf-8")
+            )
+            upstream_cookies = self._extract_cookies(upstream_raw)
+        except Exception:
+            return cookies
+
+        if "__Secure-1PSID" not in upstream_cookies:
+            return cookies
+
+        return upstream_cookies
 
     def _retire_client_locked(
         self,
