@@ -60,6 +60,13 @@ def _resolve_api_key(api_key: str) -> str:
     return os.getenv("GEMINI_GATEWAY_API_KEY") or secrets.token_urlsafe(24)
 
 
+def _default_browser_profile_dir() -> str:
+    home_dir = os.getenv("USERPROFILE") or os.getenv("HOME")
+    if home_dir:
+        return os.path.join(home_dir, ".gemini-api", "selenium-profile")
+    return os.path.join(".gemini-api", "selenium-profile")
+
+
 def _normalize_account_required_level(required_level: str) -> str:
     normalized = required_level.strip().lower()
     if normalized not in ACCOUNT_REQUIRED_LEVELS:
@@ -137,16 +144,34 @@ class GatewaySettings:
             False,
         )
     )
-    browser_cookie_source: str = field(
+    browser_profile_dir: str = field(
         default_factory=lambda: _get_env(
-            "GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE",
-            "",
+            "GEMINI_GATEWAY_BROWSER_PROFILE_DIR",
+            _default_browser_profile_dir(),
         )
     )
-    browser_cookie_domain: str = field(
-        default_factory=lambda: _get_env(
-            "GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN",
-            ".google.com",
+    browser_login_wait_seconds: int = field(
+        default_factory=lambda: _get_env_positive_int(
+            "GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS",
+            300,
+        )
+    )
+    browser_poll_interval_seconds: int = field(
+        default_factory=lambda: _get_env_positive_int(
+            "GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS",
+            2,
+        )
+    )
+    browser_page_load_timeout_seconds: int = field(
+        default_factory=lambda: _get_env_positive_int(
+            "GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS",
+            60,
+        )
+    )
+    browser_headless: bool = field(
+        default_factory=lambda: _get_env_bool(
+            "GEMINI_GATEWAY_BROWSER_HEADLESS",
+            False,
         )
     )
     proxy: str = ""

@@ -1110,8 +1110,11 @@ class GatewayService:
 
             selection = refresh_browser_cookies_to_file(
                 self.settings.cookies_json_path,
-                browser_source=self.settings.browser_cookie_source or None,
-                domain=self.settings.browser_cookie_domain,
+                profile_dir=self.settings.browser_profile_dir,
+                headless=self.settings.browser_headless,
+                login_wait_seconds=self.settings.browser_login_wait_seconds,
+                poll_interval_seconds=self.settings.browser_poll_interval_seconds,
+                page_load_timeout_seconds=self.settings.browser_page_load_timeout_seconds,
                 print_summary=False,
             )
         except Exception as exc:

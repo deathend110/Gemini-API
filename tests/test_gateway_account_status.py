@@ -174,15 +174,21 @@ class TestGatewayAccountStatus(unittest.TestCase):
 
         self.assertFalse(settings.browser_cookie_refresh_enabled)
         self.assertFalse(settings.browser_cookie_refresh_on_auth_error)
-        self.assertEqual(settings.browser_cookie_source, "")
-        self.assertEqual(settings.browser_cookie_domain, ".google.com")
+        self.assertTrue(settings.browser_profile_dir.endswith(".gemini-api\\selenium-profile"))
+        self.assertEqual(settings.browser_login_wait_seconds, 300)
+        self.assertEqual(settings.browser_poll_interval_seconds, 2)
+        self.assertEqual(settings.browser_page_load_timeout_seconds, 60)
+        self.assertFalse(settings.browser_headless)
 
     def test_gateway_settings_reads_browser_cookie_env(self) -> None:
         env = {
             "GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED": "true",
             "GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR": "true",
-            "GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE": "edge",
-            "GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN": "gemini.google.com",
+            "GEMINI_GATEWAY_BROWSER_PROFILE_DIR": r"C:\gateway\profile",
+            "GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS": "120",
+            "GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS": "3",
+            "GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS": "30",
+            "GEMINI_GATEWAY_BROWSER_HEADLESS": "true",
         }
 
         with patch.dict(os.environ, env, clear=False):
@@ -193,8 +199,11 @@ class TestGatewayAccountStatus(unittest.TestCase):
 
         self.assertTrue(settings.browser_cookie_refresh_enabled)
         self.assertTrue(settings.browser_cookie_refresh_on_auth_error)
-        self.assertEqual(settings.browser_cookie_source, "edge")
-        self.assertEqual(settings.browser_cookie_domain, "gemini.google.com")
+        self.assertEqual(settings.browser_profile_dir, r"C:\gateway\profile")
+        self.assertEqual(settings.browser_login_wait_seconds, 120)
+        self.assertEqual(settings.browser_poll_interval_seconds, 3)
+        self.assertEqual(settings.browser_page_load_timeout_seconds, 30)
+        self.assertTrue(settings.browser_headless)
 
 
 if __name__ == "__main__":

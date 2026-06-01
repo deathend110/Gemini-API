@@ -9,8 +9,11 @@ param(
     [string]$CookiesJsonPath = (Join-Path (Split-Path $PSScriptRoot -Parent) "cookies.json"),
     [bool]$BrowserCookieRefreshEnabled = $false,
     [bool]$BrowserCookieRefreshOnAuthError = $false,
-    [string]$BrowserCookieSource = "",
-    [string]$BrowserCookieDomain = ".google.com"
+    [string]$BrowserProfileDir = (Join-Path ([Environment]::GetFolderPath("UserProfile")) ".gemini-api\selenium-profile"),
+    [int]$BrowserLoginWaitSeconds = 300,
+    [int]$BrowserPollIntervalSeconds = 2,
+    [int]$BrowserPageLoadTimeoutSeconds = 60,
+    [bool]$BrowserHeadless = $false
 )
 
 $env:GEMINI_GATEWAY_API_KEY = $ApiKey
@@ -22,8 +25,11 @@ $env:GEMINI_GATEWAY_DEFAULT_MODEL = $DefaultModel
 $env:GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT = $DefaultReasoningEffort
 $env:GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED = $BrowserCookieRefreshEnabled.ToString().ToLower()
 $env:GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR = $BrowserCookieRefreshOnAuthError.ToString().ToLower()
-$env:GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE = $BrowserCookieSource
-$env:GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN = $BrowserCookieDomain
+$env:GEMINI_GATEWAY_BROWSER_PROFILE_DIR = $BrowserProfileDir
+$env:GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS = $BrowserLoginWaitSeconds.ToString()
+$env:GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS = $BrowserPollIntervalSeconds.ToString()
+$env:GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS = $BrowserPageLoadTimeoutSeconds.ToString()
+$env:GEMINI_GATEWAY_BROWSER_HEADLESS = $BrowserHeadless.ToString().ToLower()
 
 Write-Host "Gemini Gateway environment configured for current PowerShell session:"
 Write-Host "  GEMINI_GATEWAY_API_KEY=$env:GEMINI_GATEWAY_API_KEY"
@@ -35,8 +41,11 @@ Write-Host "  GEMINI_GATEWAY_DEFAULT_MODEL=$env:GEMINI_GATEWAY_DEFAULT_MODEL"
 Write-Host "  GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT=$env:GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT"
 Write-Host "  GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED=$env:GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED"
 Write-Host "  GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR=$env:GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR"
-Write-Host "  GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE=$env:GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE"
-Write-Host "  GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN=$env:GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN"
+Write-Host "  GEMINI_GATEWAY_BROWSER_PROFILE_DIR=$env:GEMINI_GATEWAY_BROWSER_PROFILE_DIR"
+Write-Host "  GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS=$env:GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS"
+Write-Host "  GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS=$env:GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS"
+Write-Host "  GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS=$env:GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS"
+Write-Host "  GEMINI_GATEWAY_BROWSER_HEADLESS=$env:GEMINI_GATEWAY_BROWSER_HEADLESS"
 Write-Host ""
 Write-Host "Recommended next steps:"
 Write-Host "  uv sync --extra browser"

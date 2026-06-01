@@ -51,24 +51,25 @@ V1.2 已经具备：
 - 启动前不会主动从浏览器同步最新登录态
 - 周期性 Cookie 回写配置已存在，但尚未形成独立后台 flush 任务
 
-### 2.3 上游已有能力
+### 2.3 上游已有能力与本机限制
 
 `gemini_webapi` 内部已经有两类可复用能力：
 
-- `load_browser_cookies(domain_name=...)`
-  - 通过 `browser-cookie3` 从 Chrome、Edge、Brave、Firefox 等浏览器读取 Cookie
 - `rotate_1psidts(...)`
   - 通过 Google `RotateCookies` 刷新 `__Secure-1PSIDTS`
   - `GeminiClient.start_auto_refresh()` 会周期性调用该能力
 
-V1.3 应复用这些能力，不自行解析浏览器 Cookie 数据库，也不重写 Google Cookie 轮转协议。
+最初设计中曾考虑复用 `browser-cookie3` 读取浏览器 Cookie 数据库。但在 Windows 新版 Chrome/Edge 中，浏览器可能启用 app-bound 加密，直接读取本机 Cookie SQLite 会遇到 DPAPI/密钥解密失败。V1.3 改为使用 Selenium 启动专用 Chrome profile，让浏览器自身维护登录态，再通过 WebDriver `get_cookies()` 读取当前会话 Cookie。
+
+V1.3 不自行解析浏览器 Cookie 数据库，也不重写 Google Cookie 轮转协议。
 
 ## 3. 设计原则
 
 V1.3 采用以下原则：
 
 - 不改变 `/v1/chat/completions` 等 OpenAI-compatible 主接口
-- 启动前浏览器 Cookie 同步必须显式执行，不在 `gateway.main` 中静默读取浏览器
+- 启动前浏览器 Cookie 同步必须显式执行，不在 `gateway.main` 中静默打开浏览器
+- Selenium 使用专用 Chrome profile，不复用用户日常浏览器 profile
 - 运行中 Cookie 续期以 `GeminiClient.auto_refresh` 为主
 - 网关负责把运行时最新 Cookie 同步到用户可见的 `cookies.json`
 - Cookie 值属于敏感信息，日志、错误、测试输出不得泄露真实值
@@ -88,10 +89,10 @@ V1.3 采用以下原则：
 
 ### 4.2 Out of Scope
 
-- 自动打开浏览器并完成 Google 登录
+- 自动填写账号密码完成 Google 登录
 - 绕过 Google 二次验证、风控或地区限制
 - 多账号池或多浏览器账号选择 UI
-- 在服务运行中频繁轮询浏览器 Cookie 数据库
+- 在服务运行中频繁轮询浏览器 profile
 - 把真实 Cookie 打印到日志或 API 响应
 - 修改根目录 README
 
@@ -120,15 +121,16 @@ uv run --extra browser python -m gateway.refresh_cookies
 脚本行为：
 
 1. 读取 `GEMINI_GATEWAY_COOKIES_JSON_PATH`，确定目标文件
-2. 调用 `load_browser_cookies()` 从浏览器读取 Cookie
-3. 从候选浏览器中选择最合适的一组 Google Cookie
-4. 校验至少包含 `__Secure-1PSID`
-5. 尽量保留 `__Secure-1PSIDTS` 和其他未过期 Google Cookie
-6. 原子写入 `cookies.json`
-7. 输出脱敏摘要，例如：
+2. 使用 Selenium 打开专用 Chrome profile
+3. 导航到 `https://gemini.google.com/app`
+4. 通过 WebDriver `get_cookies()` 读取当前会话 Cookie
+5. 校验至少包含 `__Secure-1PSID`
+6. 尽量保留 `__Secure-1PSIDTS` 和其他 Google Cookie
+7. 原子写入 `cookies.json`
+8. 输出脱敏摘要，例如：
 
 ```text
-Browser cookies refreshed: source=edge, has_1psid=true, has_1psidts=true, count=8
+Browser cookies refreshed: source=selenium-chrome-profile, has_1psid=true, has_1psidts=true, count=8
 ```
 
 ### 5.2 运行中自动轮转
@@ -195,53 +197,34 @@ GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR=true
 - 启动前脚本由用户显式执行
 - 运行中认证失败兜底默认关闭或只在安装 `browser` extra 后显式开启
 
-## 6. Cookie 来源选择策略
+## 6. Cookie 来源策略
 
-### 6.1 候选域名
+### 6.1 Selenium 专用 profile
 
-推荐读取域名：
+浏览器 Cookie 来源固定为 Selenium 启动的专用 Chrome profile：
 
-- `.google.com`
+```text
+%USERPROFILE%\.gemini-api\selenium-profile
+```
+
+首次运行 `gateway.refresh_cookies` 时，脚本会打开该 profile 并导航到：
+
+```text
+https://gemini.google.com/app
+```
+
+用户需要在打开的独立 Chrome 窗口中手动登录一次。登录完成后，脚本通过 WebDriver `get_cookies()` 获取当前会话 Cookie。后续刷新复用同一 profile，不再读取日常浏览器 Cookie 数据库。
+
+### 6.2 Cookie 过滤
+
+脚本只保留 Google/Gemini 相关域名：
+
 - `google.com`
+- `.google.com`
 - `gemini.google.com`
+- `.gemini.google.com`
 
-实际实现中可先调用：
-
-```python
-load_browser_cookies(domain_name=".google.com")
-```
-
-如果读取结果为空，再尝试：
-
-```python
-load_browser_cookies(domain_name="gemini.google.com")
-```
-
-### 6.2 候选浏览器排序
-
-`load_browser_cookies()` 返回多个浏览器的 Cookie 列表时，按以下规则选择：
-
-1. 同时包含 `__Secure-1PSID` 和 `__Secure-1PSIDTS`
-2. 包含 `__Secure-1PSID`
-3. Cookie 数量更多
-4. 固定浏览器优先级作为最终 tie-breaker
-
-建议默认浏览器优先级：
-
-```text
-edge > chrome > brave > chromium > firefox > vivaldi > opera
-```
-
-可选配置：
-
-```text
-GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE=edge
-```
-
-当用户显式指定来源时：
-
-- 只接受该浏览器来源
-- 找不到有效 Cookie 时返回明确错误
+脚本必须至少获取到 `__Secure-1PSID` 才能写入 `cookies.json`。
 
 ### 6.3 写入格式
 
@@ -254,7 +237,9 @@ GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE=edge
     "__Secure-1PSIDTS": "..."
   },
   "updated_at": 1780000000,
-  "source": "edge"
+  "source": "selenium-chrome-profile",
+  "profile_dir": "C:\\Users\\name\\.gemini-api\\selenium-profile",
+  "url": "https://gemini.google.com/app"
 }
 ```
 
@@ -268,8 +253,11 @@ GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE=edge
 | --- | --- | --- |
 | `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED` | `false` | 是否允许网关运行中调用浏览器 Cookie 刷新能力 |
 | `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR` | `false` | 认证失败时是否尝试从浏览器重新同步 Cookie |
-| `GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE` | 空 | 指定浏览器来源；为空时自动选择 |
-| `GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN` | `.google.com` | 浏览器 Cookie 查询域名 |
+| `GEMINI_GATEWAY_BROWSER_PROFILE_DIR` | `%USERPROFILE%\.gemini-api\selenium-profile` | Selenium 专用 Chrome profile 路径 |
+| `GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS` | `300` | 首次登录等待秒数 |
+| `GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS` | `2` | Cookie 检查间隔秒数 |
+| `GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS` | `60` | Gemini 页面加载超时秒数 |
+| `GEMINI_GATEWAY_BROWSER_HEADLESS` | `false` | 是否以无头模式启动 Selenium Chrome |
 
 复用现有配置：
 
@@ -315,10 +303,10 @@ uv run python -m gateway.main
 
 ### 9.1 未安装 browser extra
 
-如果缺少 `browser-cookie3`，脚本应返回清晰错误：
+如果缺少 `selenium`，脚本应返回清晰错误：
 
 ```text
-browser-cookie3 is not installed. Run: uv sync --extra browser
+selenium is not installed. Run: uv sync --extra browser
 ```
 
 不得输出堆栈作为主要用户提示。
@@ -328,14 +316,18 @@ browser-cookie3 is not installed. Run: uv sync --extra browser
 如果找不到 `__Secure-1PSID`：
 
 ```text
-No valid Gemini browser cookies found. Please log in to https://gemini.google.com in your browser first.
+No Gemini cookies found in dedicated Chrome profile. Please sign in once in the opened browser profile and rerun.
 ```
 
-### 9.3 浏览器数据库被锁或权限不足
+### 9.3 Chrome 启动失败
 
-脚本应继续尝试其他浏览器来源。
+如果 Chrome 或 Selenium Manager 启动失败，脚本返回明确错误：
 
-如果所有来源失败：
+```text
+Failed to start Chrome via Selenium: ...
+```
+
+如果刷新失败：
 
 - 输出失败原因摘要
 - 不覆盖现有 `cookies.json`
@@ -419,11 +411,10 @@ Cookie 同步与续期能力是启动和会话治理增强，不改变客户端�
 
 ### 13.1 风险
 
-- `browser-cookie3` 对不同浏览器、不同系统权限的支持不完全一致
-- 浏览器正在运行时，Cookie 数据库可能被锁
-- 本机浏览器可能登录了多个 Google 账号，自动选择不一定符合用户预期
+- Selenium 需要本机可启动 Chrome，且首次运行需要用户在专用 profile 中手动登录
+- 专用 profile 可能与正在运行的同 profile Selenium 实例互相抢锁
 - Google Cookie 轮转规则可能继续变化
-- 运行中读取浏览器 Cookie 可能带来不确定延迟
+- 运行中打开浏览器刷新 Cookie 可能带来不确定延迟
 
 ### 13.2 取舍
 
@@ -433,7 +424,7 @@ V1.3 明确选择：
 - 运行中续期以 `GeminiClient.auto_refresh` 为主
 - 运行中浏览器读取只作为认证失败兜底，不作为常规轮询机制
 
-这样可以提升自动化程度，同时避免让服务持续依赖浏览器数据库状态。
+这样可以提升自动化程度，同时避免让服务持续依赖日常浏览器状态。
 
 ## 14. 验证标准
 

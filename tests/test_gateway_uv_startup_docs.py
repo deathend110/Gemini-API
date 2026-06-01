@@ -26,6 +26,8 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
         self.assertIn("uv sync --extra browser", readme)
         self.assertIn("uv run --extra browser python -m gateway.refresh_cookies", readme)
         self.assertIn("GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR", readme)
+        self.assertIn("GEMINI_GATEWAY_BROWSER_PROFILE_DIR", readme)
+        self.assertIn("Selenium", readme)
 
     def test_gateway_env_script_mentions_refresh_cookies(self) -> None:
         script = (ROOT / "gateway" / "set_gateway_env.ps1").read_text(
@@ -34,6 +36,7 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
 
         self.assertIn("gateway.refresh_cookies", script)
         self.assertIn("uv run --extra browser python -m gateway.refresh_cookies", script)
+        self.assertIn("GEMINI_GATEWAY_BROWSER_PROFILE_DIR", script)
 
     def test_start_gateway_script_uses_uv_and_refresh_cookies(self) -> None:
         script = (ROOT / "gateway" / "start_gateway.ps1").read_text(

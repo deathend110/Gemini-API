@@ -9,8 +9,11 @@ param(
     [string]$CookiesJsonPath = (Join-Path (Split-Path $PSScriptRoot -Parent) "cookies.json"),
     [bool]$BrowserCookieRefreshEnabled = $false,
     [bool]$BrowserCookieRefreshOnAuthError = $false,
-    [string]$BrowserCookieSource = "",
-    [string]$BrowserCookieDomain = ".google.com"
+    [string]$BrowserProfileDir = (Join-Path ([Environment]::GetFolderPath("UserProfile")) ".gemini-api\selenium-profile"),
+    [int]$BrowserLoginWaitSeconds = 300,
+    [int]$BrowserPollIntervalSeconds = 2,
+    [int]$BrowserPageLoadTimeoutSeconds = 60,
+    [bool]$BrowserHeadless = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,8 +28,11 @@ $ErrorActionPreference = "Stop"
   -CookiesJsonPath $CookiesJsonPath `
   -BrowserCookieRefreshEnabled $BrowserCookieRefreshEnabled `
   -BrowserCookieRefreshOnAuthError $BrowserCookieRefreshOnAuthError `
-  -BrowserCookieSource $BrowserCookieSource `
-  -BrowserCookieDomain $BrowserCookieDomain
+  -BrowserProfileDir $BrowserProfileDir `
+  -BrowserLoginWaitSeconds $BrowserLoginWaitSeconds `
+  -BrowserPollIntervalSeconds $BrowserPollIntervalSeconds `
+  -BrowserPageLoadTimeoutSeconds $BrowserPageLoadTimeoutSeconds `
+  -BrowserHeadless $BrowserHeadless
 
 uv sync --extra browser
 uv run --extra browser python -m gateway.refresh_cookies
