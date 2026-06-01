@@ -69,6 +69,7 @@ class GatewayService:
         self._retired_clients: dict[int, GeminiClient] = {}
         self._is_warmed_up = False
         self._shared_client_lock = asyncio.Lock()
+        self._cookie_persist_task: asyncio.Task[None] | None = None
 
     def list_models(self) -> ModelListResponse:
         return ModelListResponse(
@@ -241,6 +242,53 @@ class GatewayService:
                 temp_path.unlink()
             raise
         self._cached_cookies = dict(payload["cookies"])
+
+    async def start_cookie_persist_task(self) -> None:
+        if not self.settings.cookie_persist_enabled:
+            return
+        if self._cookie_persist_task is not None and not self._cookie_persist_task.done():
+            return
+        self._cookie_persist_task = asyncio.create_task(self._run_cookie_persist_loop())
+
+    async def stop_cookie_persist_task(self) -> None:
+        task = self._cookie_persist_task
+        self._cookie_persist_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _run_cookie_persist_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.settings.cookie_persist_interval_seconds)
+                try:
+                    await self.flush_runtime_cookies()
+                except Exception as exc:
+                    print(f"Warning: failed to persist runtime cookies: {exc}")
+        except asyncio.CancelledError:
+            raise
+
+    async def flush_runtime_cookies(self) -> bool:
+        client = self._shared_client
+        if client is None:
+            return False
+
+        runtime_cookies = self._serialize_cookies_for_json(
+            getattr(client, "cookies", None)
+        )
+        if not runtime_cookies:
+            return False
+
+        merged = self._merge_serialized_cookies_with_cache(runtime_cookies)
+        if merged == (self._cached_cookies or {}):
+            return False
+
+        self.persist_cookies(merged)
+        return True
 
     def _merge_serialized_cookies_with_cache(
         self,

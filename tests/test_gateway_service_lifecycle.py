@@ -1,4 +1,5 @@
 import json
+import asyncio
 import sys
 import tempfile
 import types
@@ -257,6 +258,49 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(load_mock.call_count, 1)
         self.assertEqual(first, second)
         self.assertEqual(first["__Secure-1PSID"], "psid-value")
+
+    async def test_start_cookie_persist_task_persists_changed_runtime_cookies(
+        self,
+    ) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            cookie_persist_interval_seconds=1,
+        )
+        service = GatewayService(settings)
+        fake_client = FakeGeminiClient()
+        service._shared_client = fake_client
+        service._is_warmed_up = True
+
+        persist_mock = Mock(wraps=service.persist_cookies)
+        service.persist_cookies = persist_mock
+
+        await service.start_cookie_persist_task()
+        fake_client.cookies = FakeCookies(
+            {
+                "__Secure-1PSID": "psid-value",
+                "__Secure-1PSIDTS": "rotated-psidts",
+            }
+        )
+        await asyncio.sleep(1.2)
+        await service.stop_cookie_persist_task()
+
+        self.assertGreaterEqual(persist_mock.call_count, 1)
+        self.assertEqual(
+            service.get_cached_cookies()["__Secure-1PSIDTS"],
+            "rotated-psidts",
+        )
+
+    async def test_stop_cookie_persist_task_is_idempotent(self) -> None:
+        service = GatewayService(self.settings)
+
+        await service.stop_cookie_persist_task()
+        await service.start_cookie_persist_task()
+        await service.stop_cookie_persist_task()
+        await service.stop_cookie_persist_task()
+
+        self.assertIsNone(service._cookie_persist_task)
 
     async def test_warmup_builds_account_snapshot_from_probe_results(self) -> None:
         service = GatewayService(self.settings)

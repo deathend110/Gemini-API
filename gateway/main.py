@@ -57,10 +57,12 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await app.state.gateway_service.warmup()
+        await app.state.gateway_service.start_cookie_persist_task()
         print(f"Account mode: {resolve_startup_account_mode(app)}")
         try:
             yield
         finally:
+            await app.state.gateway_service.stop_cookie_persist_task()
             await app.state.gateway_service.shutdown()
 
     app = FastAPI(

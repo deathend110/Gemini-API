@@ -52,15 +52,32 @@ class TestGatewayApi(unittest.TestCase):
     def test_app_lifecycle_warms_up_and_shuts_down_gateway_service(self) -> None:
         warmup_mock = AsyncMock()
         shutdown_mock = AsyncMock()
+        start_persist_mock = AsyncMock()
+        stop_persist_mock = AsyncMock()
 
-        with patch.object(self.app.state.gateway_service, "warmup", warmup_mock), patch.object(
-            self.app.state.gateway_service,
-            "shutdown",
-            shutdown_mock,
+        with (
+            patch.object(self.app.state.gateway_service, "warmup", warmup_mock),
+            patch.object(
+                self.app.state.gateway_service,
+                "shutdown",
+                shutdown_mock,
+            ),
+            patch.object(
+                self.app.state.gateway_service,
+                "start_cookie_persist_task",
+                start_persist_mock,
+            ),
+            patch.object(
+                self.app.state.gateway_service,
+                "stop_cookie_persist_task",
+                stop_persist_mock,
+            ),
         ):
             with TestClient(self.app):
                 warmup_mock.assert_awaited_once()
+                start_persist_mock.assert_awaited_once()
 
+        stop_persist_mock.assert_awaited_once()
         shutdown_mock.assert_awaited_once()
 
     def test_health_endpoint(self) -> None:
