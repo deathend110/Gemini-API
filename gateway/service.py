@@ -24,6 +24,8 @@ from gateway.schemas import (
     ChatCompletionResponse,
     ChatCompletionResponseMessage,
     ChatMessage,
+    DebugModelCard,
+    DebugModelListResponse,
     ModelCard,
     ModelListResponse,
     ChatToolCall,
@@ -76,6 +78,40 @@ class GatewayService:
     def list_models(self) -> ModelListResponse:
         return ModelListResponse(
             data=[ModelCard(id=model.canonical_id) for model in CANONICAL_MODELS]
+        )
+
+    def list_debug_models(self) -> DebugModelListResponse:
+        client = self._shared_client
+        registry = getattr(client, "_model_registry", None) if client is not None else None
+        if not isinstance(registry, dict) or not registry:
+            raise GatewayServiceError(
+                message="Dynamic Gemini model registry unavailable.",
+                code="debug_models_unavailable",
+                status_code=503,
+            )
+
+        models = sorted(
+            registry.values(),
+            key=lambda model: (
+                str(getattr(model, "model_name", "")),
+                str(getattr(model, "display_name", "")),
+                str(getattr(model, "model_id", "")),
+            ),
+        )
+        return DebugModelListResponse(
+            data=[
+                DebugModelCard(
+                    model_id=str(getattr(model, "model_id", "")),
+                    model_name=str(getattr(model, "model_name", "")),
+                    display_name=str(getattr(model, "display_name", "")),
+                    description=str(getattr(model, "description", "")),
+                    is_available=bool(getattr(model, "is_available", False)),
+                    advanced_only=bool(getattr(model, "advanced_only", False)),
+                    capacity=int(getattr(model, "capacity", 0)),
+                    capacity_field=int(getattr(model, "capacity_field", 0)),
+                )
+                for model in models
+            ]
         )
 
     def resolve_model(self, public_name: str | None) -> GatewayModelSpec:

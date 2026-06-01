@@ -10,6 +10,7 @@ from gateway.config import GatewaySettings
 from gateway.schemas import (
     AccountStatusResponse,
     ChatCompletionRequest,
+    DebugModelListResponse,
     ModelListResponse,
 )
 from gateway.service import GatewayService, GatewayServiceError
@@ -95,6 +96,14 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     @app.get("/v1/models", dependencies=[Depends(verify_bearer)], response_model=ModelListResponse)
     def list_models(service: Any = Depends(get_gateway_service)) -> Any:
         return service.list_models()
+
+    @app.get(
+        "/v1/debug/models",
+        dependencies=[Depends(verify_bearer)],
+        response_model=DebugModelListResponse,
+    )
+    def list_debug_models(service: Any = Depends(get_gateway_service)) -> Any:
+        return service.list_debug_models()
 
     @app.get(
         "/v1/account/status",

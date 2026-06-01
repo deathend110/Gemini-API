@@ -116,6 +116,87 @@ class TestGatewayApi(unittest.TestCase):
             ],
         )
 
+    def test_debug_models_requires_bearer_auth(self) -> None:
+        response = self.client.get("/v1/debug/models")
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_debug_models_returns_dynamic_registry_snapshot(self) -> None:
+        self.app.state.gateway_service._shared_client = SimpleNamespace(
+            _model_registry={
+                "fbb127bbb056c959": SimpleNamespace(
+                    model_id="fbb127bbb056c959",
+                    model_name="gemini-3-flash",
+                    display_name="Fast",
+                    description="Fast model",
+                    is_available=True,
+                    advanced_only=False,
+                    capacity=1,
+                    capacity_field=12,
+                ),
+                "e6fa609c3fa255c0": SimpleNamespace(
+                    model_id="e6fa609c3fa255c0",
+                    model_name="gemini-3-pro",
+                    display_name="Pro",
+                    description="Pro model",
+                    is_available=True,
+                    advanced_only=True,
+                    capacity=2,
+                    capacity_field=12,
+                ),
+            }
+        )
+
+        response = self.client.get(
+            "/v1/debug/models",
+            headers={"Authorization": f"Bearer {self.settings.api_key}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["object"], "list")
+        self.assertEqual(
+            body["data"],
+            [
+                {
+                    "model_id": "fbb127bbb056c959",
+                    "model_name": "gemini-3-flash",
+                    "display_name": "Fast",
+                    "description": "Fast model",
+                    "is_available": True,
+                    "advanced_only": False,
+                    "capacity": 1,
+                    "capacity_field": 12,
+                },
+                {
+                    "model_id": "e6fa609c3fa255c0",
+                    "model_name": "gemini-3-pro",
+                    "display_name": "Pro",
+                    "description": "Pro model",
+                    "is_available": True,
+                    "advanced_only": True,
+                    "capacity": 2,
+                    "capacity_field": 12,
+                },
+            ],
+        )
+
+    def test_debug_models_returns_503_when_registry_missing(self) -> None:
+        self.app.state.gateway_service._shared_client = SimpleNamespace(
+            _model_registry={}
+        )
+
+        response = self.client.get(
+            "/v1/debug/models",
+            headers={"Authorization": f"Bearer {self.settings.api_key}"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["error"]["code"],
+            "debug_models_unavailable",
+        )
+
     def test_gateway_models_map_to_same_upstream_web_model_names(self) -> None:
         for model_name in [
             "gemini-3-flash",

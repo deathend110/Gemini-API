@@ -62,6 +62,22 @@ class ModelListResponse(BaseModel):
     data: list[ModelCard]
 
 
+class DebugModelCard(BaseModel):
+    model_id: str
+    model_name: str
+    display_name: str
+    description: str
+    is_available: bool
+    advanced_only: bool
+    capacity: int
+    capacity_field: int
+
+
+class DebugModelListResponse(BaseModel):
+    object: str = "list"
+    data: list[DebugModelCard]
+
+
 class AccountStatusResponse(BaseModel):
     raw_account_status: str
     raw_account_status_code: int | None = None
