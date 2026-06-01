@@ -1,4 +1,5 @@
 import asyncio
+from curl_cffi.requests import Cookies
 import json
 import os
 import sys
@@ -72,6 +73,30 @@ class FakeCookies:
 
     def to_dict(self) -> dict[str, str]:
         return dict(self._values)
+
+
+def build_conflicting_runtime_cookies() -> Cookies:
+    cookies = Cookies()
+    cookies.set(
+        "__Secure-1PSID",
+        "psid-value",
+        domain=".google.com",
+        path="/",
+        secure=True,
+    )
+    cookies.set(
+        "__Secure-1PSIDTS",
+        "fresh-psidts-value",
+        domain=".google.com",
+        path="/",
+        secure=True,
+    )
+    cookies.set("AEC", "aec-google", domain=".google.com", path="/")
+    cookies.set("AEC", "aec-google-hk", domain=".google.com.hk", path="/")
+    cookies.set("NID", "nid-google", domain=".google.com", path="/")
+    cookies.set("NID", "nid-google-hk", domain=".google.com.hk", path="/")
+    cookies.set("SIDCC", "sidcc-google", domain=".google.com", path="/")
+    return cookies
 
 
 class FakeGeminiClient:
@@ -778,6 +803,48 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.secure_1psid, "psid-value")
         self.assertEqual(client.secure_1psidts, "psidts-value")
         self.assertIsNone(client.cookies)
+
+    def test_serialize_cookies_for_json_ignores_conflicting_non_google_com_tlds(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+
+        serialized = service._serialize_cookies_for_json(
+            build_conflicting_runtime_cookies()
+        )
+
+        self.assertEqual(serialized["__Secure-1PSID"], "psid-value")
+        self.assertEqual(serialized["__Secure-1PSIDTS"], "fresh-psidts-value")
+        self.assertEqual(serialized["AEC"], "aec-google")
+        self.assertEqual(serialized["NID"], "nid-google")
+        self.assertEqual(serialized["SIDCC"], "sidcc-google")
+
+    async def test_generate_text_rebuild_handles_conflicting_runtime_cookie_domains(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(generate_error=RecoverableTimeoutError("timeout"))
+        first_client.cookies = build_conflicting_runtime_cookies()
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        text = await service.generate_text(
+            prompt="hello",
+            upstream_model="gemini-3-flash",
+            request=request,
+        )
+
+        self.assertEqual(text, "recovered reply")
+        self.assertEqual(first_client.close_calls, 1)
+        self.assertEqual(service.get_cached_cookies()["AEC"], "aec-google")
+        self.assertEqual(service.get_cached_cookies()["NID"], "nid-google")
+        self.assertEqual(
+            service.get_cached_cookies()["__Secure-1PSIDTS"],
+            "fresh-psidts-value",
+        )
 
     async def test_generate_text_rebuild_does_not_close_client_held_by_other_request(
         self,

@@ -217,6 +217,33 @@ class GatewayService:
                 if isinstance(name, str) and isinstance(value, str)
             }
 
+        jar = getattr(cookies, "jar", None)
+        if jar is not None:
+            serialized: dict[str, str] = {}
+            priorities: dict[str, int] = {}
+            for cookie in jar:
+                name = getattr(cookie, "name", None)
+                value = getattr(cookie, "value", None)
+                if not isinstance(name, str) or not isinstance(value, str):
+                    continue
+
+                domain_priority = self._google_cookie_domain_priority(
+                    getattr(cookie, "domain", None)
+                )
+                if domain_priority <= 0:
+                    continue
+
+                is_expired = getattr(cookie, "is_expired", None)
+                if callable(is_expired) and is_expired():
+                    continue
+
+                if domain_priority < priorities.get(name, -1):
+                    continue
+
+                serialized[name] = value
+                priorities[name] = domain_priority
+            return serialized
+
         to_dict = getattr(cookies, "to_dict", None)
         if callable(to_dict):
             serialized = to_dict()
@@ -235,20 +262,21 @@ class GatewayService:
                 if isinstance(name, str) and isinstance(value, str)
             }
 
-        jar = getattr(cookies, "jar", None)
-        if jar is not None:
-            serialized: dict[str, str] = {}
-            for cookie in jar:
-                name = getattr(cookie, "name", None)
-                value = getattr(cookie, "value", None)
-                if isinstance(name, str) and isinstance(value, str):
-                    serialized[name] = value
-            return serialized
-
         if isinstance(cookies, list):
             return self._cookies_from_list(cookies)
 
         return {}
+
+    def _google_cookie_domain_priority(self, domain: Any) -> int:
+        if not isinstance(domain, str):
+            return 0
+
+        normalized = domain.lstrip(".").lower()
+        if normalized == "google.com":
+            return 2
+        if normalized.endswith(".google.com"):
+            return 1
+        return 0
 
     def persist_cookies(self, cookies: Any, *, force: bool = False) -> None:
         if not force and not self.settings.cookie_persist_enabled:
