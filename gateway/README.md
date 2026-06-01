@@ -1,41 +1,74 @@
 # Gemini Gateway 使用说明
 
-本目录提供一个本地 OpenAI-compatible 网关，方便把 `gemini_webapi` 暴露给 AstrBot、Fitness Agent 或其他支持 OpenAI Chat Completions 协议的客户端。
+`gateway/` 提供一个本地 FastAPI 网关，把 `gemini_webapi` 封装成 OpenAI-compatible Chat Completions 接口。它适合接入 AstrBot、Fitness Agent 或其他支持 OpenAI `base_url + api_key + model` 配置方式的客户端。
 
-当前 V1.2 核心能力：
+## 1. 项目概览
 
+网关对外提供：
+
+- `GET /health`
 - `GET /v1/models`
 - `GET /v1/account/status`
 - `POST /v1/chat/completions`
 - `POST /chat/completions`
-- `stream=true` 的 SSE 输出，结束返回 `data: [DONE]`
-- OpenAI 风格 `tools` 输入与 `tool_calls` 输出
-- `messages[].content[]` 图片输入：`type=text`、`type=image_url`
-- 扩展文件输入：`extra_body.files[{name, content_type, data_base64}]`
-- 启动阶段账户探测与账户模式摘要
-- `cookies.json` 原子回写、重建前 cookies 同步、strict mode 能力门槛校验
 
-## 1. 启动前准备
+主要支持：
 
-### 1.1 安装依赖
+- OpenAI 风格 Bearer 鉴权
+- 非流式与 SSE 流式聊天补全
+- OpenAI 风格 `tools`
+- 图片输入：`messages[].content[].image_url`
+- 文件输入：`extra_body.files`
+- 本地 `cookies.json` 登录态读取与持久化
 
-本仓库使用 `uv` 管理本地虚拟环境和依赖。首次运行或依赖变更后，在仓库根目录执行：
+默认监听地址：
+
+```text
+http://127.0.0.1:8010
+```
+
+OpenAI-compatible Base URL：
+
+```text
+http://127.0.0.1:8010/v1
+```
+
+## 2. 快速启动
+
+本仓库使用 `uv` 管理本地虚拟环境。请在仓库根目录执行：
 
 ```powershell
+cd G:\VSCODE-G\Gemini-API
 uv sync
+. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
+uv run python -m gateway.main
 ```
 
 说明：
 
-- `uv sync` 会按 `pyproject.toml` 和 `uv.lock` 创建或更新仓库内 `.venv`
-- 后续启动统一使用 `uv run ...`，不要直接调用 conda/base 环境里的 `python`
-- 如果只运行网关，通常不需要手动激活 `.venv`
+- `uv sync` 会按 `pyproject.toml` 和 `uv.lock` 创建或更新本地 `.venv`
+- `. .\gateway\set_gateway_env.ps1` 前面的 `. ` 是 PowerShell dot-source 语法，用于把环境变量写入当前会话
+- 启动网关时统一使用 `uv run python -m gateway.main`，不要直接使用 conda/base 环境里的 `python`
 
-### 1.2 准备 Cookies
+启动后终端会输出：
+
+- `Base URL`
+- `API Key`
+- `Default model`
+- `Default reasoning effort`
+- `Account mode`
+
+健康检查：
+
+```powershell
+curl http://127.0.0.1:8010/health
+```
+
+## 3. Cookies
 
 网关通过本地 `cookies.json` 读取 Gemini Web 登录态。至少需要 `__Secure-1PSID`，建议同时包含 `__Secure-1PSIDTS`。
 
-示例：
+仓库根目录的 `cookies.json` 示例：
 
 ```json
 {
@@ -44,44 +77,32 @@ uv sync
 }
 ```
 
-### 1.3 配置环境变量
+也支持带 `cookies` 字段的对象格式：
 
-常用环境变量：
-
-```bash
-set GEMINI_GATEWAY_API_KEY=replace-with-your-key
-set GEMINI_GATEWAY_COOKIES_JSON_PATH=G:\Gemini API\Gemini-API\cookies.json
-set GEMINI_GATEWAY_HOST=127.0.0.1
-set GEMINI_GATEWAY_PORT=8010
-set GEMINI_GATEWAY_DEFAULT_MODEL=gemini-3.5-flash
-set GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT=standard
-set GEMINI_GATEWAY_PROXY=http://127.0.0.1:10090/
-set GEMINI_GATEWAY_COOKIE_PERSIST_ENABLED=true
-set GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS=60
-set GEMINI_GATEWAY_ACCOUNT_PROBE_ENABLED=true
-set GEMINI_GATEWAY_ACCOUNT_STRICT_MODE=false
-set GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL=basic
+```json
+{
+  "cookies": {
+    "__Secure-1PSID": "your-cookie",
+    "__Secure-1PSIDTS": "your-cookie-ts"
+  }
+}
 ```
 
-说明：
+注意：
 
-- 模型与思考强度分离；未传 `reasoning_effort` 时默认是 `standard`
-- 当前支持 `reasoning_effort=standard|extended`；`extended` 会作为额外推理提示注入到 prompt
+- `cookies.json` 属于本地敏感文件，不要提交到 Git
+- 如果手动更新了 `cookies.json`，建议重启网关
 - 代理、Cookies 路径等本机依赖请显式配置，不要假设调用方环境
-- `GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL` 支持 `basic`、`standard`、`full_web`
-- `GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS` 必须为正整数
 
-推荐直接使用仓库内置脚本为当前 PowerShell 会话设置环境变量：
+## 4. 环境变量
+
+推荐通过脚本设置环境变量：
 
 ```powershell
 . .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
 ```
 
-说明：
-
-- 前面的 `. ` 不能省略，这是 PowerShell 的 dot-source 语法
-- 脚本默认把 `cookies.json` 指向仓库根目录下的 `cookies.json`
-- 如需自定义代理、模型或端口，可直接传参数，例如：
+常用参数：
 
 ```powershell
 . .\gateway\set_gateway_env.ps1 `
@@ -92,142 +113,71 @@ set GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL=basic
   -Port 8010
 ```
 
-或者在 `set_gateway_env.ps1` 内部设置好默认值，然后进入项目根目录运行 `. .\gateway\set_gateway_env.ps1`。
+常用环境变量：
 
-## 2. 启动网关
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `GEMINI_GATEWAY_API_KEY` | 客户端访问网关时使用的 Bearer Token | 脚本默认 `gemini-api` |
+| `GEMINI_GATEWAY_COOKIES_JSON_PATH` | `cookies.json` 路径 | 仓库根目录 `cookies.json` |
+| `GEMINI_GATEWAY_HOST` | 监听地址 | `127.0.0.1` |
+| `GEMINI_GATEWAY_PORT` | 监听端口 | `8010` |
+| `GEMINI_GATEWAY_DEFAULT_MODEL` | 默认模型 | `gemini-3.5-flash` |
+| `GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT` | 默认推理强度 | `standard` |
+| `GEMINI_GATEWAY_PROXY` | Gemini 上游请求代理 | `http://127.0.0.1:10090/` |
+| `GEMINI_GATEWAY_ACCOUNT_PROBE_ENABLED` | 是否启动账户能力探测 | `true` |
+| `GEMINI_GATEWAY_ACCOUNT_STRICT_MODE` | 是否要求启动时满足账户能力门槛 | `false` |
+| `GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL` | strict mode 的能力要求 | `basic` |
 
-在仓库根目录执行：
+`reasoning_effort` 支持：
+
+- `standard`
+- `extended`
+
+## 5. OpenAI-compatible 接口
+
+### 5.1 列模型
 
 ```powershell
-uv run python -m gateway.main
+curl http://127.0.0.1:8010/v1/models `
+  -H "Authorization: Bearer your-local-key"
 ```
 
-推荐的完整 PowerShell 启动流程：
+### 5.2 账户状态
 
 ```powershell
-cd G:\VSCODE-G\Gemini-API
-uv sync
-. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
-uv run python -m gateway.main
+curl http://127.0.0.1:8010/v1/account/status `
+  -H "Authorization: Bearer your-local-key"
 ```
 
-默认监听：
+### 5.3 聊天补全
 
-```text
-http://127.0.0.1:8010
-```
-
-启动后会打印：
-
-- `Base URL`
-- `API Key`
-- `Default model`
-- `Default reasoning effort`
-- `Account mode`
-
-健康检查：
-
-```bash
-curl http://127.0.0.1:8010/health
-```
-
-## 2.1 V1.1 性能优化说明
-
-V1.1 在不改变 OpenAI-compatible 接口形状的前提下，主要做了三项性能优化：
-
-- 网关启动时会预热上游 Gemini 会话，首个真实请求不再承担完整初始化成本
-- 普通对话与流式对话会复用共享上游 `GeminiClient`，不再每请求都 `init/close`
-- `cookies.json` 会在启动后加载进内存缓存，后续请求不再重复读文件
-
-同时，V1.1 增加了共享 client 失效后的受控重建：
-
-- 当上游出现 `AuthError`、`TimeoutError`、`APIError`、`GeminiError` 时，当前请求最多触发一次重建重试
-- 流式请求只会在首个 chunk 之前失败时重建，避免已经输出的内容重复
-
-注意事项：
-
-- 首次启动阶段会多花一点时间，因为 startup 里会先完成 warmup
-- 如果你手动更新了本地 `cookies.json`，请重启 gateway，让新的 cookies 重新加载生效
-- 当前优化重点是连续请求延迟，不是高并发连接池
-
-## 2.2 V1.2 账户会话治理说明
-
-V1.2 在 V1.1 的共享 client 基础上，补上了账户状态、cookies 持久化和诊断能力：
-
-- `GatewayService` 会在 warmup 后构建账户快照，区分 `available`、`degraded`、`blocked`
-- startup 摘要会输出 `Account mode`
-- `GET /v1/account/status` 可返回标准化账户状态
-- shutdown 时会把当前共享 client 的最新 cookies 原子回写到 `cookies.json`
-- shared client 重建前会先同步内存 cookies，避免回退到旧 cookies
-- 可通过 strict mode 在 startup 阶段要求 `basic`、`standard` 或 `full_web` 能力门槛
-
-说明：
-
-- `UNAUTHENTICATED` warning 不再直接等同于“完全不可用”，应结合账户快照一起判断
-- 默认不启用 strict mode，保持现有基础对话兼容性
-- `cookies.json` 会以原子替换方式更新，降低异常中断导致文件损坏的风险
-
-## 3. OpenAI-compatible 接口
-
-### 3.1 列模型
-
-```bash
-curl http://127.0.0.1:8010/v1/models ^
-  -H "Authorization: Bearer replace-with-your-key"
-```
-
-### 3.2 账户状态
-
-```bash
-curl http://127.0.0.1:8010/v1/account/status ^
-  -H "Authorization: Bearer replace-with-your-key"
-```
-
-返回示例：
-
-```json
-{
-  "raw_account_status": "UNAUTHENTICATED",
-  "raw_account_status_code": 1016,
-  "chat_available": true,
-  "advanced_models_available": false,
-  "deep_research_available": false,
-  "full_web_capability_available": false,
-  "mode": "degraded",
-  "unavailable_reasons": [
-    "advanced_models_unavailable",
-    "deep_research_unavailable"
-  ]
-}
-```
-
-### 3.3 聊天补全
-
-```bash
-curl http://127.0.0.1:8010/v1/chat/completions ^
-  -H "Authorization: Bearer replace-with-your-key" ^
-  -H "Content-Type: application/json" ^
+```powershell
+curl http://127.0.0.1:8010/v1/chat/completions `
+  -H "Authorization: Bearer your-local-key" `
+  -H "Content-Type: application/json" `
   -d "{\"model\":\"gemini-3.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
 ```
 
-### 3.4 流式输出
+### 5.4 流式输出
 
-```bash
-curl http://127.0.0.1:8010/v1/chat/completions ^
-  -H "Authorization: Bearer replace-with-your-key" ^
-  -H "Content-Type: application/json" ^
+```powershell
+curl http://127.0.0.1:8010/v1/chat/completions `
+  -H "Authorization: Bearer your-local-key" `
+  -H "Content-Type: application/json" `
   -d "{\"model\":\"gemini-3.5-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"请分三点介绍你自己\"}]}"
 ```
 
-返回为 SSE，最后一条是：
+流式响应为 SSE，结束标记为：
 
 ```text
 data: [DONE]
 ```
 
-## 4. 图片与文件输入
+## 6. 图片与文件输入
 
-### 4.1 `data:` 图片
+### 6.1 图片输入
+
+`image_url.url` 支持 `data:`、`http://` 和 `https://`。
 
 ```json
 {
@@ -249,11 +199,9 @@ data: [DONE]
 }
 ```
 
-### 4.2 远程图片
+### 6.2 文件输入
 
-`image_url.url` 也支持 `http://` 或 `https://`。
-
-### 4.3 扩展文件输入
+通过 `extra_body.files` 传入 base64 文件：
 
 ```json
 {
@@ -273,11 +221,11 @@ data: [DONE]
 }
 ```
 
-## 5. Tools 约定
+## 7. Tools
 
-网关接收 OpenAI `tools`，并把工具约束注入到 Gemini prompt。
+网关接收 OpenAI `tools`，并把工具约束注入 Gemini prompt。如果 Gemini 按约定返回 JSON，网关会转换为 OpenAI 风格的 `message.tool_calls`。
 
-如果 Gemini 按约定返回 JSON：
+Gemini 侧期望返回格式：
 
 ```json
 {
@@ -292,34 +240,24 @@ data: [DONE]
 }
 ```
 
-网关会转成 OpenAI 风格的 `message.tool_calls`。非流式已支持；流式场景会尽量输出 `delta.tool_calls`。
+## 8. AstrBot 接入
 
-## 6. AstrBot 接入
-
-AstrBot 侧按 OpenAI 服务接入即可：
+AstrBot 侧按 OpenAI 服务接入：
 
 - Base URL: `http://127.0.0.1:8010/v1`
-- API Key: 你配置的 `GEMINI_GATEWAY_API_KEY`
+- API Key: `GEMINI_GATEWAY_API_KEY`
 - Model: `gemini-3.5-flash`、`gemini-3.1-pro` 或 `gemini-3.1-flash-lite`
 
-如果 AstrBot 支持自定义请求体，可按需透传：
+建议先确认：
 
-- `reasoning_effort`
-- `extra_body.files`
-- `tools`
-- `stream`
+1. `/health` 返回正常
+2. `/v1/models` 鉴权正常
+3. `/v1/account/status` 的账户状态符合预期
+4. 普通聊天补全能返回内容
 
-建议先用 AstrBot 的模型测试或普通对话确认：
+## 9. 使用注意
 
-1. 鉴权正常
-2. `messages` 会完整透传
-3. 代理与 Cookies 路径可被当前运行环境访问
-4. `/v1/account/status` 返回的 `mode` 符合当前账户能力预期
-
-## 7. 当前限制
-
-- V1.2 仍为无状态网关，客户端必须每次传完整 `messages`
-- `tools` 采用最小可用协议，依赖模型按约定输出 JSON
-- 流式工具调用是兼容型实现，不保证逐 token 输出工具参数
-- 共享 client 当前是单实例复用，优先优化连续请求延迟，不是最终并发形态
-- strict mode 的能力判定仍基于当前网页端可观测能力，不等于官方 Gemini API 的全部特性
+- 网关是无状态 OpenAI-compatible 服务，客户端需要在每次请求中传完整 `messages`
+- `tools` 是兼容层实现，依赖 Gemini 按约定输出 JSON
+- 如果请求明显变慢，优先检查代理、Gemini Web 登录态、客户端传入的历史消息长度
+- 如果 `cookies.json` 失效，请重新从 Gemini Web 登录态中获取 Cookie
