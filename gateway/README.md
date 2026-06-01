@@ -108,7 +108,7 @@ curl http://127.0.0.1:8010/health
 . .\gateway\set_gateway_env.ps1 `
   -ApiKey "your-local-key" `
   -Proxy "http://127.0.0.1:10090/" `
-  -DefaultModel "gemini-3.5-flash" `
+  -DefaultModel "gemini-3-flash" `
   -DefaultReasoningEffort "standard" `
   -Port 8010
 ```
@@ -121,7 +121,7 @@ curl http://127.0.0.1:8010/health
 | `GEMINI_GATEWAY_COOKIES_JSON_PATH` | `cookies.json` 路径 | 仓库根目录 `cookies.json` |
 | `GEMINI_GATEWAY_HOST` | 监听地址 | `127.0.0.1` |
 | `GEMINI_GATEWAY_PORT` | 监听端口 | `8010` |
-| `GEMINI_GATEWAY_DEFAULT_MODEL` | 默认模型 | `gemini-3.5-flash` |
+| `GEMINI_GATEWAY_DEFAULT_MODEL` | 默认模型 | `gemini-3-flash` |
 | `GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT` | 默认推理强度 | `standard` |
 | `GEMINI_GATEWAY_PROXY` | Gemini 上游请求代理 | `http://127.0.0.1:10090/` |
 | `GEMINI_GATEWAY_ACCOUNT_PROBE_ENABLED` | 是否启动账户能力探测 | `true` |
@@ -134,6 +134,14 @@ curl http://127.0.0.1:8010/health
 - `extended`
 
 ## 5. OpenAI-compatible 接口
+
+模型名严格使用 Gemini Web 上游名称：
+
+- `gemini-3-flash`
+- `gemini-3-flash-thinking`
+- `gemini-3-pro`
+
+历史包装名如 `gemini-3.5-flash`、`gemini-3.1-pro`、`gemini-3.1-flash-lite` 不再作为 gateway 模型名使用。
 
 ### 5.1 列模型
 
@@ -155,7 +163,7 @@ curl http://127.0.0.1:8010/v1/account/status `
 curl http://127.0.0.1:8010/v1/chat/completions `
   -H "Authorization: Bearer your-local-key" `
   -H "Content-Type: application/json" `
-  -d "{\"model\":\"gemini-3.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
+  -d "{\"model\":\"gemini-3-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
 ```
 
 ### 5.4 流式输出
@@ -164,7 +172,7 @@ curl http://127.0.0.1:8010/v1/chat/completions `
 curl http://127.0.0.1:8010/v1/chat/completions `
   -H "Authorization: Bearer your-local-key" `
   -H "Content-Type: application/json" `
-  -d "{\"model\":\"gemini-3.5-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"请分三点介绍你自己\"}]}"
+  -d "{\"model\":\"gemini-3-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"请分三点介绍你自己\"}]}"
 ```
 
 流式响应为 SSE，结束标记为：
@@ -181,7 +189,7 @@ data: [DONE]
 
 ```json
 {
-  "model": "gemini-3.5-flash",
+  "model": "gemini-3-flash",
   "messages": [
     {
       "role": "user",
@@ -205,7 +213,7 @@ data: [DONE]
 
 ```json
 {
-  "model": "gemini-3.5-flash",
+  "model": "gemini-3-flash",
   "messages": [
     { "role": "user", "content": "请总结附件" }
   ],
@@ -246,7 +254,7 @@ AstrBot 侧按 OpenAI 服务接入：
 
 - Base URL: `http://127.0.0.1:8010/v1`
 - API Key: `GEMINI_GATEWAY_API_KEY`
-- Model: `gemini-3.5-flash`、`gemini-3.1-pro` 或 `gemini-3.1-flash-lite`
+- Model: `gemini-3-flash`、`gemini-3-flash-thinking` 或 `gemini-3-pro`
 
 建议先确认：
 

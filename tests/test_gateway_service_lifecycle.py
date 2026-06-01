@@ -179,7 +179,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
 
     def make_request(self) -> ChatCompletionRequest:
         return ChatCompletionRequest(
-            model="gemini-3.5-flash",
+            model="gemini-3-flash",
             messages=[ChatMessage(role="user", content="hello")],
         )
 

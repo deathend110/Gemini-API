@@ -49,23 +49,10 @@ class GatewayServiceError(Exception):
 
 
 CANONICAL_MODELS: tuple[GatewayModelSpec, ...] = (
-    GatewayModelSpec("gemini-3.1-pro", "gemini-3-pro"),
-    GatewayModelSpec("gemini-3.5-flash", "gemini-3-flash"),
-    GatewayModelSpec("gemini-3.1-flash-lite", "gemini-3-flash"),
+    GatewayModelSpec("gemini-3-flash", "gemini-3-flash"),
+    GatewayModelSpec("gemini-3-flash-thinking", "gemini-3-flash-thinking"),
+    GatewayModelSpec("gemini-3-pro", "gemini-3-pro"),
 )
-
-MODEL_ALIASES: dict[str, str] = {
-    "gemini-3.1-pro": "gemini-3.1-pro",
-    "gemini-3-pro": "gemini-3.1-pro",
-    "3.1-pro": "gemini-3.1-pro",
-    "gemini-3.5-flash": "gemini-3.5-flash",
-    "gemini-3-flash": "gemini-3.5-flash",
-    "3.5-flash": "gemini-3.5-flash",
-    "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
-    "3.1-flash-lite": "gemini-3.1-flash-lite",
-    "3.1 Flash-Lite": "gemini-3.1-flash-lite",
-}
-
 
 class GatewayService:
     def __init__(self, settings: GatewaySettings) -> None:
@@ -90,8 +77,7 @@ class GatewayService:
 
     def resolve_model(self, public_name: str | None) -> GatewayModelSpec:
         requested_name = public_name or self.settings.default_model
-        canonical_name = MODEL_ALIASES.get(requested_name, requested_name)
-        model = self._models_by_id.get(canonical_name)
+        model = self._models_by_id.get(requested_name)
         if model is None:
             raise GatewayServiceError(
                 message=f"Unsupported model: {requested_name}",

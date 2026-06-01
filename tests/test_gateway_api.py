@@ -93,18 +93,32 @@ class TestGatewayApi(unittest.TestCase):
         self.assertEqual(
             [item["id"] for item in response.json()["data"]],
             [
-                "gemini-3.1-pro",
-                "gemini-3.5-flash",
-                "gemini-3.1-flash-lite",
+                "gemini-3-flash",
+                "gemini-3-flash-thinking",
+                "gemini-3-pro",
             ],
         )
 
-    def test_flash_lite_alias_uses_available_flash_upstream_model(self) -> None:
-        model = self.app.state.gateway_service.resolve_model(
-            "gemini-3.1-flash-lite"
-        )
+    def test_gateway_models_map_to_same_upstream_web_model_names(self) -> None:
+        for model_name in [
+            "gemini-3-flash",
+            "gemini-3-flash-thinking",
+            "gemini-3-pro",
+        ]:
+            with self.subTest(model_name=model_name):
+                model = self.app.state.gateway_service.resolve_model(model_name)
+                self.assertEqual(model.upstream_name, model_name)
 
-        self.assertEqual(model.upstream_name, "gemini-3-flash")
+    def test_legacy_gateway_model_names_are_not_supported(self) -> None:
+        for model_name in [
+            "gemini-3.5-flash",
+            "gemini-3.1-pro",
+            "gemini-3.1-flash-lite",
+            "3.1 Flash-Lite",
+        ]:
+            with self.subTest(model_name=model_name):
+                with self.assertRaisesRegex(Exception, "Unsupported model"):
+                    self.app.state.gateway_service.resolve_model(model_name)
 
     def test_account_status_requires_bearer_auth(self) -> None:
         response = self.client.get("/v1/account/status")
@@ -169,7 +183,7 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_chat_completions_alias_route_exists(self) -> None:
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "hello"}],
         }
 
@@ -189,7 +203,7 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_chat_completions_returns_openai_shape(self) -> None:
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": False,
         }
@@ -208,7 +222,7 @@ class TestGatewayApi(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["object"], "chat.completion")
-        self.assertEqual(body["model"], "gemini-3.5-flash")
+        self.assertEqual(body["model"], "gemini-3-flash")
         self.assertEqual(body["choices"][0]["index"], 0)
         self.assertEqual(body["choices"][0]["message"]["role"], "assistant")
         self.assertEqual(body["choices"][0]["message"]["content"], "stub reply")
@@ -220,7 +234,7 @@ class TestGatewayApi(unittest.TestCase):
             yield "reply"
 
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": True,
         }
@@ -243,7 +257,7 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_tool_call_response_uses_openai_tool_calls_shape(self) -> None:
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "帮我查深圳天气"}],
             "tools": [
                 {
@@ -295,7 +309,7 @@ class TestGatewayApi(unittest.TestCase):
             return "image ok"
 
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [
                 {
                     "role": "user",
@@ -334,7 +348,7 @@ class TestGatewayApi(unittest.TestCase):
             return "file ok"
 
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "请总结附件"}],
             "extra_body": {
                 "files": [
@@ -363,7 +377,7 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_invalid_reasoning_effort_returns_structured_error(self) -> None:
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "reasoning_effort": "turbo",
             "messages": [{"role": "user", "content": "hello"}],
         }
@@ -379,7 +393,7 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_upstream_timeout_returns_structured_error(self) -> None:
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "hello"}],
         }
 
@@ -399,7 +413,7 @@ class TestGatewayApi(unittest.TestCase):
 
     def test_invalid_extra_body_files_returns_structured_error(self) -> None:
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3-flash",
             "messages": [{"role": "user", "content": "请总结附件"}],
             "extra_body": {
                 "files": [

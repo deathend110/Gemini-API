@@ -83,7 +83,7 @@ class GatewaySettings:
     default_model: str = field(
         default_factory=lambda: _get_env(
             "GEMINI_GATEWAY_DEFAULT_MODEL",
-            "gemini-3.5-flash",
+            "gemini-3-flash",
         )
     )
     default_reasoning_effort: str = field(

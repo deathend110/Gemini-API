@@ -2,7 +2,7 @@ param(
     [string]$ApiKey = "gemini-api",
     [string]$GatewayHost = "127.0.0.1",
     [int]$Port = 8010,
-    [string]$DefaultModel = "gemini-3.5-flash",
+    [string]$DefaultModel = "gemini-3-flash",
     [ValidateSet("standard", "extended")]
     [string]$DefaultReasoningEffort = "standard",
     [string]$Proxy = "http://127.0.0.1:10090/",
