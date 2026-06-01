@@ -10,9 +10,11 @@ from gateway.config import GatewaySettings
 from gateway.refresh_cookies import (
     BrowserCookieRefreshError,
     BrowserCookieSelection,
+    DevToolsEndpoint,
     build_manual_chrome_launch_command,
     collect_google_cookies,
     load_browser_cookies_from_profile,
+    load_devtools_endpoint_from_profile,
     main,
     print_manual_login_guidance,
     refresh_browser_cookies_to_file,
@@ -38,6 +40,52 @@ class TestGatewayRefreshCookies(unittest.TestCase):
         )
         self.assertIn('--profile-directory="Default"', command)
         self.assertIn('"https://gemini.google.com/app"', command)
+
+    def test_build_manual_chrome_launch_command_enables_remote_debugging(
+        self,
+    ) -> None:
+        command = build_manual_chrome_launch_command(
+            Path(r"C:\Users\27355\.gemini-api\selenium-profile")
+        )
+
+        self.assertIn("--remote-debugging-port=0", command)
+
+    def test_load_devtools_endpoint_from_profile_reads_port_and_ws_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / "DevToolsActivePort").write_text(
+                "9222\n/devtools/browser/test-browser-id\n",
+                encoding="utf-8",
+            )
+
+            endpoint = load_devtools_endpoint_from_profile(profile_dir)
+
+        self.assertEqual(
+            endpoint,
+            DevToolsEndpoint(
+                port=9222,
+                browser_websocket_url=(
+                    "ws://127.0.0.1:9222/devtools/browser/test-browser-id"
+                ),
+                version_url="http://127.0.0.1:9222/json/version",
+            ),
+        )
+
+    def test_load_devtools_endpoint_from_profile_requires_debugging_session_when_file_missing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+
+            with self.assertRaises(BrowserCookieRefreshError) as ctx:
+                load_devtools_endpoint_from_profile(profile_dir)
+
+        self.assertTrue(ctx.exception.manual_login_required)
+        self.assertTrue(ctx.exception.debugging_session_required)
 
     def test_collect_google_cookies_filters_non_google_domains(self) -> None:
         cookies = collect_google_cookies(

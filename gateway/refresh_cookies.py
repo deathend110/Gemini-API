@@ -20,10 +20,12 @@ class BrowserCookieRefreshError(Exception):
         message: str,
         *,
         manual_login_required: bool = False,
+        debugging_session_required: bool = False,
         profile_in_use: bool = False,
     ) -> None:
         super().__init__(message)
         self.manual_login_required = manual_login_required
+        self.debugging_session_required = debugging_session_required
         self.profile_in_use = profile_in_use
 
 
@@ -49,6 +51,13 @@ class BrowserCookieSelection:
         )
 
 
+@dataclass(frozen=True)
+class DevToolsEndpoint:
+    port: int
+    browser_websocket_url: str
+    version_url: str
+
+
 def build_manual_chrome_launch_command(
     profile_dir: str | Path,
     url: str = MANUAL_GEMINI_URL,
@@ -61,7 +70,31 @@ def build_manual_chrome_launch_command(
         '}; '
         f'& $Chrome --user-data-dir="{resolved_profile_dir}" '
         '--profile-directory="Default" '
+        '--remote-debugging-port=0 '
         f'"{url}"'
+    )
+
+
+def load_devtools_endpoint_from_profile(profile_dir: str | Path) -> DevToolsEndpoint:
+    active_port_file = Path(profile_dir) / "DevToolsActivePort"
+    if not active_port_file.is_file():
+        raise BrowserCookieRefreshError(
+            "未检测到专用 Chrome profile 的远程调试会话，请先按指引手动启动带 remote debugging 的 Chrome。",
+            manual_login_required=True,
+            debugging_session_required=True,
+        )
+
+    lines = [
+        line.strip()
+        for line in active_port_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    port = int(lines[0])
+    browser_path = lines[1]
+    return DevToolsEndpoint(
+        port=port,
+        browser_websocket_url=f"ws://127.0.0.1:{port}{browser_path}",
+        version_url=f"http://127.0.0.1:{port}/json/version",
     )
 
 
