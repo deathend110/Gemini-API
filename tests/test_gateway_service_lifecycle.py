@@ -39,6 +39,7 @@ sys.modules.setdefault("gemini_webapi", gemini_stub)
 sys.modules.setdefault("gemini_webapi.exceptions", exceptions_stub)
 
 from gateway.config import GatewaySettings
+from gateway.refresh_cookies import BrowserCookieRefreshError
 from gateway.schemas import ChatCompletionRequest, ChatMessage
 from gateway import service as gateway_service_module
 from gateway.service import GatewayService
@@ -933,6 +934,62 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(cookies["__Secure-1PSID"], "psid-value")
         self.assertEqual(cookies["__Secure-1PSIDTS"], "new-upstream-psidts")
+
+    def test_refresh_cookies_from_browser_updates_cached_cookies_from_manual_profile(
+        self,
+    ) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            browser_cookie_refresh_enabled=True,
+        )
+        service = GatewayService(settings)
+
+        with patch(
+            "gateway.refresh_cookies.refresh_browser_cookies_to_file",
+            return_value=SimpleNamespace(
+                source="manual-chrome-profile",
+                cookies={
+                    "__Secure-1PSID": "new-psid",
+                    "__Secure-1PSIDTS": "new-psidts",
+                },
+            ),
+        ):
+            refreshed = service.refresh_cookies_from_browser()
+
+        self.assertTrue(refreshed)
+        self.assertEqual(service.get_cached_cookies()["__Secure-1PSID"], "new-psid")
+        self.assertEqual(
+            service.get_cached_cookies()["__Secure-1PSIDTS"],
+            "new-psidts",
+        )
+
+    def test_refresh_cookies_from_browser_returns_false_when_manual_login_is_required(
+        self,
+    ) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            browser_cookie_refresh_enabled=True,
+        )
+        service = GatewayService(settings)
+
+        with patch(
+            "gateway.refresh_cookies.refresh_browser_cookies_to_file",
+            side_effect=BrowserCookieRefreshError(
+                "未检测到专用 Chrome profile 中的有效 Gemini 登录态。",
+                manual_login_required=True,
+            ),
+        ), patch("builtins.print") as print_mock:
+            refreshed = service.refresh_cookies_from_browser()
+
+        self.assertFalse(refreshed)
+        print_mock.assert_any_call(
+            "Warning: browser cookies require manual profile login: "
+            "未检测到专用 Chrome profile 中的有效 Gemini 登录态。"
+        )
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
-browser = ["selenium>=4.34.0,<5"]
+browser = ["browser-cookie3>=0.19.1,<0.20"]
 
 [dependency-groups]
 dev = [

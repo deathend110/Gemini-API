@@ -1122,7 +1122,10 @@ class GatewayService:
             return False
 
         try:
-            from gateway.refresh_cookies import refresh_browser_cookies_to_file
+            from gateway.refresh_cookies import (
+                BrowserCookieRefreshError,
+                refresh_browser_cookies_to_file,
+            )
 
             selection = refresh_browser_cookies_to_file(
                 self.settings.cookies_json_path,
@@ -1133,6 +1136,15 @@ class GatewayService:
                 page_load_timeout_seconds=self.settings.browser_page_load_timeout_seconds,
                 print_summary=False,
             )
+        except BrowserCookieRefreshError as exc:
+            if exc.manual_login_required:
+                print(
+                    "Warning: browser cookies require manual profile login: "
+                    f"{exc}"
+                )
+            else:
+                print(f"Warning: failed to refresh browser cookies: {exc}")
+            return False
         except Exception as exc:
             print(f"Warning: failed to refresh browser cookies: {exc}")
             return False

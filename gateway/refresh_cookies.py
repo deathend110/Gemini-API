@@ -10,12 +10,14 @@ from typing import Any, Callable
 from uuid import uuid4
 
 
-SELENIUM_GEMINI_URL = "https://gemini.google.com/app"
-DEFAULT_BROWSER_SOURCE = "selenium-chrome-profile"
+MANUAL_GEMINI_URL = "https://gemini.google.com/app"
+DEFAULT_BROWSER_SOURCE = "manual-chrome-profile"
 
 
 class BrowserCookieRefreshError(Exception):
-    pass
+    def __init__(self, message: str, *, manual_login_required: bool = False) -> None:
+        super().__init__(message)
+        self.manual_login_required = manual_login_required
 
 
 @dataclass(frozen=True)
@@ -40,31 +42,25 @@ class BrowserCookieSelection:
         )
 
 
-def build_chrome_launch_args(
-    user_data_dir: str | Path,
-    *,
-    headless: bool = False,
-) -> list[str]:
-    args = [
-        f"--user-data-dir={Path(user_data_dir)}",
-        "--profile-directory=Default",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-popup-blocking",
-    ]
-    if headless:
-        args.append("--headless=new")
-    return args
+def build_manual_chrome_launch_command(
+    profile_dir: str | Path,
+    url: str = MANUAL_GEMINI_URL,
+) -> str:
+    resolved_profile_dir = str(Path(profile_dir))
+    return (
+        '$Chrome = "${env:ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe"; '
+        'if (-not (Test-Path $Chrome)) { '
+        '$Chrome = "${env:ProgramFiles(x86)}\\Google\\Chrome\\Application\\chrome.exe" '
+        '}; '
+        f'& $Chrome --user-data-dir="{resolved_profile_dir}" '
+        '--profile-directory="Default" '
+        f'"{url}"'
+    )
 
 
 def _is_google_cookie_domain(domain: str) -> bool:
     normalized = domain.strip().lower()
-    return (
-        normalized == "google.com"
-        or normalized.endswith(".google.com")
-        or normalized == "gemini.google.com"
-        or normalized.endswith(".gemini.google.com")
-    )
+    return normalized == "google.com" or normalized.endswith(".google.com")
 
 
 def collect_google_cookies(items: list[dict[str, Any]]) -> dict[str, str]:
@@ -83,6 +79,14 @@ def collect_google_cookies(items: list[dict[str, Any]]) -> dict[str, str]:
     return cookies
 
 
+def _profile_cookie_file(profile_dir: str | Path) -> Path:
+    return Path(profile_dir) / "Default" / "Network" / "Cookies"
+
+
+def _profile_local_state_file(profile_dir: str | Path) -> Path:
+    return Path(profile_dir) / "Local State"
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -98,120 +102,105 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def _create_chrome_driver(
-    profile_dir: str | Path,
-    *,
-    headless: bool = False,
-    browser_binary: str | None = None,
-    driver_factory: Callable[..., Any] | None = None,
-) -> Any:
-    if driver_factory is not None:
-        return driver_factory(options=None)
-
+def _default_browser_loader() -> Callable[..., Any]:
     try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options as ChromeOptions
+        import browser_cookie3 as bc3
     except ImportError as exc:
         raise BrowserCookieRefreshError(
-            "selenium is not installed. Run: uv sync --extra browser"
+            "browser-cookie3 is not installed. Run: uv sync --extra browser"
         ) from exc
 
-    options = ChromeOptions()
-    for arg in build_chrome_launch_args(profile_dir, headless=headless):
-        options.add_argument(arg)
-    if browser_binary:
-        options.binary_location = browser_binary
-
-    try:
-        return webdriver.Chrome(options=options)
-    except Exception as exc:
-        raise BrowserCookieRefreshError(
-            f"Failed to start Chrome via Selenium: {exc}"
-        ) from exc
+    return bc3.chrome
 
 
-def _wait_for_gemini_cookies(
-    driver: Any,
-    *,
-    login_wait_seconds: int,
-    poll_interval_seconds: int,
-) -> dict[str, str]:
-    deadline = time.monotonic() + max(login_wait_seconds, 0)
-    while True:
-        cookies = collect_google_cookies(driver.get_cookies())
-        if "__Secure-1PSID" in cookies:
-            return cookies
+def _normalize_browser_cookie_item(cookie: Any) -> dict[str, str] | None:
+    name = getattr(cookie, "name", None)
+    value = getattr(cookie, "value", None)
+    domain = getattr(cookie, "domain", None)
+    if not isinstance(name, str) or not isinstance(value, str) or not isinstance(domain, str):
+        return None
 
-        if time.monotonic() >= deadline:
-            break
+    is_expired = getattr(cookie, "is_expired", None)
+    if callable(is_expired) and is_expired():
+        return None
 
-        if poll_interval_seconds > 0:
-            time.sleep(poll_interval_seconds)
-
-    raise BrowserCookieRefreshError(
-        "No Gemini cookies found in dedicated Chrome profile. "
-        "Please sign in once in the opened browser profile and rerun."
-    )
+    return {
+        "name": name,
+        "value": value,
+        "domain": domain,
+    }
 
 
-def load_browser_cookies_with_selenium(
+def load_browser_cookies_from_profile(
     *,
     profile_dir: str | Path,
-    url: str = SELENIUM_GEMINI_URL,
-    headless: bool = False,
-    login_wait_seconds: int = 300,
-    poll_interval_seconds: int = 2,
-    page_load_timeout_seconds: int = 60,
-    browser_binary: str | None = None,
-    driver_factory: Callable[..., Any] | None = None,
-    verbose: bool = False,
+    domain_name: str = ".google.com",
+    browser_loader: Callable[..., Any] | None = None,
 ) -> BrowserCookieSelection:
-    driver = _create_chrome_driver(
-        profile_dir,
-        headless=headless,
-        browser_binary=browser_binary,
-        driver_factory=driver_factory,
-    )
+    cookie_file = _profile_cookie_file(profile_dir)
+    key_file = _profile_local_state_file(profile_dir)
+    if not cookie_file.is_file() or not key_file.is_file():
+        raise BrowserCookieRefreshError(
+            "未检测到专用 Chrome profile 中的有效 Gemini 登录态。",
+            manual_login_required=True,
+        )
+
+    loader = browser_loader or _default_browser_loader()
 
     try:
-        try:
-            driver.set_page_load_timeout(page_load_timeout_seconds)
-        except Exception:
-            pass
-
-        if verbose:
-            print(f"Opening Gemini in dedicated Chrome profile: {Path(profile_dir)}")
-
-        driver.get(url)
-        cookies = _wait_for_gemini_cookies(
-            driver,
-            login_wait_seconds=login_wait_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-        return BrowserCookieSelection(
-            source=DEFAULT_BROWSER_SOURCE,
-            cookies=cookies,
+        jar = loader(
+            cookie_file=str(cookie_file),
+            domain_name=domain_name,
+            key_file=str(key_file),
         )
     except BrowserCookieRefreshError:
         raise
     except Exception as exc:
         raise BrowserCookieRefreshError(
-            f"Failed to refresh browser cookies via Selenium: {exc}"
+            f"Failed to load dedicated Chrome profile cookies: {exc}"
         ) from exc
-    finally:
-        quit_driver = getattr(driver, "quit", None)
-        if callable(quit_driver):
-            try:
-                quit_driver()
-            except Exception:
-                pass
+
+    normalized_items = []
+    for cookie in jar:
+        item = _normalize_browser_cookie_item(cookie)
+        if item is not None:
+            normalized_items.append(item)
+
+    cookies = collect_google_cookies(normalized_items)
+    if "__Secure-1PSID" not in cookies:
+        raise BrowserCookieRefreshError(
+            "未检测到专用 Chrome profile 中的有效 Gemini 登录态。",
+            manual_login_required=True,
+        )
+
+    return BrowserCookieSelection(
+        source=DEFAULT_BROWSER_SOURCE,
+        cookies=cookies,
+    )
+
+
+def print_manual_login_guidance(
+    *,
+    profile_dir: str | Path,
+    url: str = MANUAL_GEMINI_URL,
+) -> None:
+    print("未检测到专用 Chrome profile 中的有效 Gemini 登录态。")
+    print(
+        "Google 可能会阻止由自动化框架控制的 Chrome 登录账号，因此请先手动启动专用 profile 并完成 Gemini 登录。"
+    )
+    print("")
+    print(build_manual_chrome_launch_command(profile_dir, url=url))
+    print("")
+    print("请复制上面的 PowerShell 命令并手动运行。")
+    print("在打开的专用 Chrome 中完成 Gemini 登录后，再重新执行：")
+    print("uv run --extra browser python -m gateway.refresh_cookies")
 
 
 def refresh_browser_cookies_to_file(
     cookies_path: str | Path,
     *,
     profile_dir: str | Path,
-    url: str = SELENIUM_GEMINI_URL,
+    url: str = MANUAL_GEMINI_URL,
     headless: bool = False,
     login_wait_seconds: int = 300,
     poll_interval_seconds: int = 2,
@@ -220,17 +209,15 @@ def refresh_browser_cookies_to_file(
     verbose: bool = False,
     print_summary: bool = True,
 ) -> BrowserCookieSelection:
+    del headless
+    del login_wait_seconds
+    del poll_interval_seconds
+    del page_load_timeout_seconds
+    del browser_binary
+    del verbose
+
     path = Path(cookies_path)
-    selection = load_browser_cookies_with_selenium(
-        profile_dir=profile_dir,
-        url=url,
-        headless=headless,
-        login_wait_seconds=login_wait_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-        page_load_timeout_seconds=page_load_timeout_seconds,
-        browser_binary=browser_binary,
-        verbose=verbose,
-    )
+    selection = load_browser_cookies_from_profile(profile_dir=profile_dir)
     payload = {
         "cookies": dict(sorted(selection.cookies.items())),
         "updated_at": int(time.time()),
@@ -248,11 +235,14 @@ def main(argv: list[str] | None = None) -> int:
     from gateway.config import GatewaySettings
 
     parser = argparse.ArgumentParser(
-        description="Refresh Gemini gateway cookies from a dedicated Selenium Chrome profile.",
+        description=(
+            "Refresh Gemini gateway cookies from a manually signed-in dedicated "
+            "Chrome profile."
+        ),
     )
     parser.add_argument("--cookies-path", default=None)
     parser.add_argument("--profile-dir", default=None)
-    parser.add_argument("--url", default=SELENIUM_GEMINI_URL)
+    parser.add_argument("--url", default=MANUAL_GEMINI_URL)
     parser.add_argument("--login-wait-seconds", type=int, default=None)
     parser.add_argument("--poll-interval-seconds", type=int, default=None)
     parser.add_argument("--page-load-timeout-seconds", type=int, default=None)
@@ -294,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
             verbose=args.verbose,
         )
     except BrowserCookieRefreshError as exc:
+        if exc.manual_login_required:
+            print_manual_login_guidance(profile_dir=profile_dir, url=args.url)
         print(str(exc), file=sys.stderr)
         return 1
     return 0

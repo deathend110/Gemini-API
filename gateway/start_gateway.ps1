@@ -16,6 +16,9 @@ param(
     [bool]$BrowserHeadless = $false
 )
 
+# If refresh_cookies reports that manual login is required, copy the printed
+# PowerShell command, sign in to Gemini in the dedicated profile, then rerun this script.
+
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "set_gateway_env.ps1") `

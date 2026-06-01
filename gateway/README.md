@@ -50,8 +50,8 @@ uv run python -m gateway.main
 - `. .\gateway\set_gateway_env.ps1` 前面的 `. ` 是 PowerShell dot-source 语法，用于把环境变量写入当前会话
 - 启动网关时统一使用 `uv run python -m gateway.main`，不要直接使用 conda/base 环境里的 `python`
 
-如果需要自动刷新 `cookies.json`，推荐使用 Selenium 专用 Chrome profile。
-首次运行会打开一个独立 Chrome profile，请在该窗口中手动登录 Gemini Web；后续脚本会复用这个 profile 读取 Cookie：
+如果需要刷新 `cookies.json`，推荐使用手动启动专用 Chrome profile 的流程。
+首次运行 `gateway.refresh_cookies` 时，如果未检测到有效 Gemini 登录态，脚本会打印一条完整可复制的 PowerShell 命令。请复制 `gateway.refresh_cookies` 输出的完整 PowerShell 命令，手动启动专用 Chrome profile 并完成 Gemini 登录，然后重新运行刷新命令：
 
 ```powershell
 uv sync --extra browser
@@ -84,7 +84,7 @@ curl http://127.0.0.1:8010/health
 
 网关通过本地 `cookies.json` 读取 Gemini Web 登录态。至少需要 `__Secure-1PSID`，建议同时包含 `__Secure-1PSIDTS`。
 
-`gateway.refresh_cookies` 使用 Selenium 启动专用 Chrome profile，不会复用你的日常浏览器 profile，也不会要求在配置中保存 Google 账号密码。
+`gateway.refresh_cookies` 会从专用 Chrome profile 读取本地登录态，不会复用你的日常浏览器 profile，也不会要求在配置中保存 Google 账号密码。
 
 仓库根目录的 `cookies.json` 示例：
 
@@ -144,11 +144,11 @@ curl http://127.0.0.1:8010/health
 | `GEMINI_GATEWAY_PROXY` | Gemini 上游请求代理 | `http://127.0.0.1:10090/` |
 | `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED` | 是否允许浏览器 Cookie 刷新 | `false` |
 | `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR` | 认证失败时是否尝试刷新浏览器 Cookie | `false` |
-| `GEMINI_GATEWAY_BROWSER_PROFILE_DIR` | Selenium 专用 Chrome profile 路径 | 用户目录下 `.gemini-api\selenium-profile` |
+| `GEMINI_GATEWAY_BROWSER_PROFILE_DIR` | 专用 Chrome profile 路径 | 用户目录下 `.gemini-api\selenium-profile` |
 | `GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS` | 首次登录等待秒数 | `300` |
 | `GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS` | Cookie 检查间隔秒数 | `2` |
 | `GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS` | Gemini 页面加载超时秒数 | `60` |
-| `GEMINI_GATEWAY_BROWSER_HEADLESS` | 是否以无头模式启动 Selenium Chrome | `false` |
+| `GEMINI_GATEWAY_BROWSER_HEADLESS` | 兼容保留字段，当前手动 profile 登录流程不会使用 | `false` |
 | `GEMINI_GATEWAY_ACCOUNT_PROBE_ENABLED` | 是否启动账户能力探测 | `true` |
 | `GEMINI_GATEWAY_ACCOUNT_STRICT_MODE` | 是否要求启动时满足账户能力门槛 | `false` |
 | `GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL` | strict mode 的能力要求 | `basic` |

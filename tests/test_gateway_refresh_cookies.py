@@ -1,37 +1,43 @@
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from gateway.config import GatewaySettings
 from gateway.refresh_cookies import (
     BrowserCookieRefreshError,
     BrowserCookieSelection,
-    build_chrome_launch_args,
+    build_manual_chrome_launch_command,
     collect_google_cookies,
-    load_browser_cookies_with_selenium,
+    load_browser_cookies_from_profile,
+    main,
+    print_manual_login_guidance,
     refresh_browser_cookies_to_file,
 )
-from gateway.config import GatewaySettings
 from gateway.service import GatewayService
 
 
 class TestGatewayRefreshCookies(unittest.TestCase):
-    def test_build_chrome_launch_args_includes_dedicated_profile(self) -> None:
-        args = build_chrome_launch_args(
-            Path(r"C:\Users\27355\.gemini-api\selenium-profile"),
-            headless=True,
+    def test_build_manual_chrome_launch_command_uses_profile_dir_and_gemini_url(
+        self,
+    ) -> None:
+        command = build_manual_chrome_launch_command(
+            Path(r"C:\Users\27355\.gemini-api\selenium-profile")
         )
 
         self.assertIn(
-            "--user-data-dir=C:\\Users\\27355\\.gemini-api\\selenium-profile",
-            args,
+            '${env:ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe',
+            command,
         )
-        self.assertIn("--profile-directory=Default", args)
-        self.assertIn("--headless=new", args)
-        self.assertIn("--no-first-run", args)
+        self.assertIn(
+            '--user-data-dir="C:\\Users\\27355\\.gemini-api\\selenium-profile"',
+            command,
+        )
+        self.assertIn('--profile-directory="Default"', command)
+        self.assertIn('"https://gemini.google.com/app"', command)
 
     def test_collect_google_cookies_filters_non_google_domains(self) -> None:
         cookies = collect_google_cookies(
@@ -64,58 +70,87 @@ class TestGatewayRefreshCookies(unittest.TestCase):
         self.assertNotIn("AEC", cookies)
         self.assertNotIn("NID", cookies)
 
-    def test_load_browser_cookies_with_selenium_waits_for_login(self) -> None:
-        class FakeDriver:
-            def __init__(self) -> None:
-                self.calls = 0
-                self.urls: list[str] = []
-                self.closed = False
+    def test_load_browser_cookies_from_profile_uses_explicit_cookie_and_state_files(
+        self,
+    ) -> None:
+        captured: dict[str, object] = {}
 
-            def get(self, url: str) -> None:
-                self.urls.append(url)
+        class FakeCookie:
+            def __init__(self, name: str, value: str, domain: str) -> None:
+                self.name = name
+                self.value = value
+                self.domain = domain
 
-            def get_cookies(self) -> list[dict[str, str]]:
-                self.calls += 1
-                if self.calls == 1:
-                    return [
-                        {
-                            "name": "NID",
-                            "value": "nid",
-                            "domain": ".google.com",
-                        }
-                    ]
-                return [
-                    {
-                        "name": "__Secure-1PSID",
-                        "value": "psid",
-                        "domain": ".google.com",
-                    },
-                    {
-                        "name": "__Secure-1PSIDTS",
-                        "value": "psidts",
-                        "domain": ".google.com",
-                    },
-                ]
+            def is_expired(self) -> bool:
+                return False
 
-            def quit(self) -> None:
-                self.closed = True
+        def fake_loader(*, cookie_file: str, domain_name: str, key_file: str):
+            captured["cookie_file"] = cookie_file
+            captured["key_file"] = key_file
+            captured["domain_name"] = domain_name
+            return [
+                FakeCookie("__Secure-1PSID", "psid", ".google.com"),
+                FakeCookie("__Secure-1PSIDTS", "psidts", ".google.com"),
+            ]
 
-        driver = FakeDriver()
-        selection = load_browser_cookies_with_selenium(
-            profile_dir=Path(tempfile.gettempdir()) / "selenium-profile-test",
-            driver_factory=lambda **kwargs: driver,
-            login_wait_seconds=1,
-            poll_interval_seconds=0,
-            page_load_timeout_seconds=1,
-            headless=False,
-            verbose=False,
+        selection = load_browser_cookies_from_profile(
+            profile_dir=Path(r"C:\Users\27355\.gemini-api\selenium-profile"),
+            browser_loader=fake_loader,
         )
 
-        self.assertEqual(driver.urls, ["https://gemini.google.com/app"])
-        self.assertTrue(driver.closed)
-        self.assertEqual(selection.source, "selenium-chrome-profile")
+        self.assertEqual(
+            captured["cookie_file"],
+            r"C:\Users\27355\.gemini-api\selenium-profile\Default\Network\Cookies",
+        )
+        self.assertEqual(
+            captured["key_file"],
+            r"C:\Users\27355\.gemini-api\selenium-profile\Local State",
+        )
+        self.assertEqual(captured["domain_name"], ".google.com")
+        self.assertEqual(selection.source, "manual-chrome-profile")
         self.assertEqual(selection.cookies["__Secure-1PSID"], "psid")
         self.assertEqual(selection.cookies["__Secure-1PSIDTS"], "psidts")
+
+    def test_load_browser_cookies_from_profile_requires_manual_login_when_profile_files_missing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(
+                BrowserCookieRefreshError,
+                "未检测到专用 Chrome profile 中的有效 Gemini 登录态",
+            ) as ctx:
+                load_browser_cookies_from_profile(
+                    profile_dir=Path(temp_dir) / "profile",
+                    browser_loader=lambda **kwargs: self.fail(
+                        "browser_loader should not be called when profile files are missing"
+                    ),
+                )
+
+        self.assertTrue(ctx.exception.manual_login_required)
+
+    def test_print_manual_login_guidance_outputs_copyable_pwsh_command(self) -> None:
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            print_manual_login_guidance(
+                profile_dir=Path(r"C:\Users\27355\.gemini-api\selenium-profile"),
+                url="https://gemini.google.com/app",
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("未检测到专用 Chrome profile 中的有效 Gemini 登录态", output)
+        self.assertIn(
+            "Google 可能会阻止由自动化框架控制的 Chrome 登录账号",
+            output,
+        )
+        self.assertIn(
+            '--user-data-dir="C:\\Users\\27355\\.gemini-api\\selenium-profile"',
+            output,
+        )
+        self.assertIn(
+            "uv run --extra browser python -m gateway.refresh_cookies",
+            output,
+        )
 
     def test_refresh_browser_cookies_writes_gateway_compatible_json_without_leaking_values(
         self,
@@ -125,9 +160,9 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             stdout = StringIO()
 
             with patch(
-                "gateway.refresh_cookies.load_browser_cookies_with_selenium",
+                "gateway.refresh_cookies.load_browser_cookies_from_profile",
                 return_value=BrowserCookieSelection(
-                    source="selenium-chrome-profile",
+                    source="manual-chrome-profile",
                     cookies={
                         "__Secure-1PSID": "secret-psid",
                         "__Secure-1PSIDTS": "secret-psidts",
@@ -141,17 +176,17 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 )
 
             payload = json.loads(cookies_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["source"], "selenium-chrome-profile")
+            self.assertEqual(payload["source"], "manual-chrome-profile")
             self.assertEqual(payload["cookies"]["__Secure-1PSID"], "secret-psid")
             self.assertEqual(
                 payload["cookies"]["__Secure-1PSIDTS"],
                 "secret-psidts",
             )
-            self.assertEqual(result.source, "selenium-chrome-profile")
+            self.assertEqual(result.source, "manual-chrome-profile")
 
             output = stdout.getvalue()
             self.assertIn("Browser cookies refreshed:", output)
-            self.assertIn("source=selenium-chrome-profile", output)
+            self.assertIn("source=manual-chrome-profile", output)
             self.assertIn("has_1psid=true", output)
             self.assertNotIn("secret-psid", output)
             self.assertNotIn("secret-psidts", output)
@@ -176,9 +211,10 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             )
 
             with patch(
-                "gateway.refresh_cookies.load_browser_cookies_with_selenium",
+                "gateway.refresh_cookies.load_browser_cookies_from_profile",
                 side_effect=BrowserCookieRefreshError(
-                    "No Gemini cookies found in dedicated Chrome profile."
+                    "未检测到专用 Chrome profile 中的有效 Gemini 登录态。",
+                    manual_login_required=True,
                 ),
             ):
                 with self.assertRaises(BrowserCookieRefreshError):
@@ -194,44 +230,65 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 "old-psid",
             )
 
-    def test_load_browser_cookies_with_selenium_errors_when_cookie_never_appears(
+    def test_load_browser_cookies_from_profile_errors_when_cookie_never_appears(
         self,
     ) -> None:
-        class FakeDriver:
-            def __init__(self) -> None:
-                self.closed = False
+        class FakeCookie:
+            def __init__(self, name: str, value: str, domain: str) -> None:
+                self.name = name
+                self.value = value
+                self.domain = domain
 
-            def get(self, url: str) -> None:
-                self.url = url
+            def is_expired(self) -> bool:
+                return False
 
-            def get_cookies(self) -> list[dict[str, str]]:
-                return [
-                    {
-                        "name": "NID",
-                        "value": "nid",
-                        "domain": ".google.com",
-                    }
-                ]
-
-            def quit(self) -> None:
-                self.closed = True
-
-        driver = FakeDriver()
         with self.assertRaisesRegex(
             BrowserCookieRefreshError,
-            "No Gemini cookies found in dedicated Chrome profile",
-        ):
-            load_browser_cookies_with_selenium(
+            "未检测到专用 Chrome profile 中的有效 Gemini 登录态",
+        ) as ctx:
+            load_browser_cookies_from_profile(
                 profile_dir=Path(tempfile.gettempdir()) / "selenium-profile-test",
-                driver_factory=lambda **kwargs: driver,
-                login_wait_seconds=0,
-                poll_interval_seconds=0,
-                page_load_timeout_seconds=1,
-                headless=False,
-                verbose=False,
+                browser_loader=lambda **kwargs: [
+                    FakeCookie("NID", "nid", ".google.com")
+                ],
             )
 
-        self.assertTrue(driver.closed)
+        self.assertTrue(ctx.exception.manual_login_required)
+
+    def test_main_prints_manual_login_guidance_when_profile_not_logged_in(
+        self,
+    ) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with (
+            patch(
+                "gateway.refresh_cookies.refresh_browser_cookies_to_file",
+                side_effect=BrowserCookieRefreshError(
+                    "未检测到专用 Chrome profile 中的有效 Gemini 登录态。",
+                    manual_login_required=True,
+                ),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                ["--profile-dir", r"C:\Users\27355\.gemini-api\selenium-profile"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "未检测到专用 Chrome profile 中的有效 Gemini 登录态",
+            stderr.getvalue(),
+        )
+        self.assertIn(
+            "Google 可能会阻止由自动化框架控制的 Chrome 登录账号",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            '--user-data-dir="C:\\Users\\27355\\.gemini-api\\selenium-profile"',
+            stdout.getvalue(),
+        )
 
 
 if __name__ == "__main__":
