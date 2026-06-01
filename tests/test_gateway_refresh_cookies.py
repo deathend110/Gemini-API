@@ -297,6 +297,44 @@ class TestGatewayRefreshCookies(unittest.TestCase):
         self.assertEqual(selection.cookies["__Secure-1PSIDTS"], "live-psidts")
         self.assertNotIn("NID", selection.cookies)
 
+    def test_load_browser_cookies_via_cdp_skips_event_frames_until_matching_response(
+        self,
+    ) -> None:
+        endpoint = DevToolsEndpoint(
+            port=58472,
+            browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+            version_url="http://127.0.0.1:58472/json/version",
+        )
+        fake_ws = Mock()
+        fake_ws.recv_json.side_effect = [
+            {
+                "method": "Target.targetCreated",
+                "params": {"targetInfo": {"targetId": "background-page"}},
+            },
+            {
+                "id": 1,
+                "result": {
+                    "cookies": [
+                        {
+                            "name": "__Secure-1PSID",
+                            "value": "live-psid",
+                            "domain": ".google.com",
+                        }
+                    ]
+                },
+            },
+        ]
+        fake_session = Mock()
+        fake_session.ws_connect.return_value = fake_ws
+
+        selection = load_browser_cookies_via_cdp(
+            endpoint=endpoint,
+            session_factory=lambda: fake_session,
+        )
+
+        self.assertEqual(fake_ws.recv_json.call_count, 2)
+        self.assertEqual(selection.cookies["__Secure-1PSID"], "live-psid")
+
     def test_print_manual_login_guidance_outputs_copyable_pwsh_command(self) -> None:
         stdout = StringIO()
 
@@ -434,9 +472,16 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             )
 
             with patch(
-                "gateway.refresh_cookies.load_browser_cookies_from_profile",
+                "gateway.refresh_cookies.load_devtools_endpoint_from_profile",
+                return_value=DevToolsEndpoint(
+                    port=58472,
+                    browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+                    version_url="http://127.0.0.1:58472/json/version",
+                ),
+            ), patch(
+                "gateway.refresh_cookies.load_browser_cookies_via_cdp",
                 side_effect=BrowserCookieRefreshError(
-                    "未检测到专用 Chrome profile 中的有效 Gemini 登录态。",
+                    "已连接专用 Chrome，但未检测到有效 Gemini 登录态。",
                     manual_login_required=True,
                 ),
             ):
@@ -487,6 +532,34 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             )
 
         self.assertTrue(ctx.exception.manual_login_required)
+
+    def test_load_browser_cookies_via_cdp_raises_when_matching_response_has_error(
+        self,
+    ) -> None:
+        endpoint = DevToolsEndpoint(
+            port=58472,
+            browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+            version_url="http://127.0.0.1:58472/json/version",
+        )
+        fake_ws = Mock()
+        fake_ws.recv_json.return_value = {
+            "id": 1,
+            "error": {
+                "code": -32000,
+                "message": "Storage agent unavailable",
+            },
+        }
+        fake_session = Mock()
+        fake_session.ws_connect.return_value = fake_ws
+
+        with self.assertRaisesRegex(
+            BrowserCookieRefreshError,
+            "Storage agent unavailable",
+        ):
+            load_browser_cookies_via_cdp(
+                endpoint=endpoint,
+                session_factory=lambda: fake_session,
+            )
 
     def test_load_browser_cookies_from_profile_errors_when_cookie_never_appears(
         self,

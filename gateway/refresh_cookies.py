@@ -258,14 +258,21 @@ def load_browser_cookies_via_cdp(
     endpoint: DevToolsEndpoint,
     session_factory: Callable[[], Any] | None = None,
 ) -> BrowserCookieSelection:
+    request_id = 1
     session = (
         session_factory() if session_factory is not None else _default_devtools_session_factory()
     )
     websocket = None
     try:
         websocket = session.ws_connect(endpoint.browser_websocket_url)
-        websocket.send_json({"id": 1, "method": "Storage.getCookies"})
-        response = websocket.recv_json()
+        websocket.send_json({"id": request_id, "method": "Storage.getCookies"})
+        while True:
+            response = websocket.recv_json()
+            if not isinstance(response, dict):
+                continue
+            if response.get("id") != request_id:
+                continue
+            break
     except BrowserCookieRefreshError:
         raise
     except Exception as exc:
@@ -278,6 +285,15 @@ def load_browser_cookies_via_cdp(
         close = getattr(session, "close", None)
         if callable(close):
             close()
+
+    if "error" in response:
+        error = response.get("error")
+        message = "Chrome DevTools cookie 查询失败。"
+        if isinstance(error, dict):
+            error_message = error.get("message")
+            if isinstance(error_message, str) and error_message:
+                message = f"Chrome DevTools cookie 查询失败: {error_message}"
+        raise BrowserCookieRefreshError(message)
 
     result = response.get("result") if isinstance(response, dict) else None
     cookie_items = result.get("cookies") if isinstance(result, dict) else None
