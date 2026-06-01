@@ -764,6 +764,9 @@ class GatewayService:
                     return response.text
                 except Exception as exc:
                     if attempt == 0 and self._should_rebuild_shared_client(exc):
+                        if self._should_refresh_browser_cookies_after_error(exc):
+                            if not self.refresh_cookies_from_browser():
+                                raise
                         rebuilt_client, rebuilt_generation = (
                             await self._rebuild_shared_client_after_failure(
                                 failed_client=client,
@@ -805,6 +808,9 @@ class GatewayService:
                         and not yielded_any_chunk
                         and self._should_rebuild_shared_client(exc)
                     ):
+                        if self._should_refresh_browser_cookies_after_error(exc):
+                            if not self.refresh_cookies_from_browser():
+                                raise
                         rebuilt_client, rebuilt_generation = (
                             await self._rebuild_shared_client_after_failure(
                                 failed_client=client,
@@ -1087,6 +1093,33 @@ class GatewayService:
 
     def _should_rebuild_shared_client(self, exc: Exception) -> bool:
         return isinstance(exc, (AuthError, TimeoutError, APIError, GeminiError))
+
+    def _should_refresh_browser_cookies_after_error(self, exc: Exception) -> bool:
+        return (
+            self.settings.browser_cookie_refresh_enabled
+            and self.settings.browser_cookie_refresh_on_auth_error
+            and isinstance(exc, AuthError)
+        )
+
+    def refresh_cookies_from_browser(self) -> bool:
+        if not self.settings.browser_cookie_refresh_enabled:
+            return False
+
+        try:
+            from gateway.refresh_cookies import refresh_browser_cookies_to_file
+
+            selection = refresh_browser_cookies_to_file(
+                self.settings.cookies_json_path,
+                browser_source=self.settings.browser_cookie_source or None,
+                domain=self.settings.browser_cookie_domain,
+                print_summary=False,
+            )
+        except Exception as exc:
+            print(f"Warning: failed to refresh browser cookies: {exc}")
+            return False
+
+        self._cached_cookies = dict(selection.cookies)
+        return True
 
     def _retire_client_locked(
         self,

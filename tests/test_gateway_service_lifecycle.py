@@ -43,6 +43,7 @@ from gateway import service as gateway_service_module
 from gateway.service import GatewayService
 
 RecoverableAPIError = gateway_service_module.APIError
+RecoverableAuthError = gateway_service_module.AuthError
 RecoverableGeminiError = gateway_service_module.GeminiError
 RecoverableTimeoutError = gateway_service_module.TimeoutError
 
@@ -403,6 +404,82 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(second_client.init_calls), 1)
         self.assertEqual(len(first_client.generate_calls), 1)
         self.assertEqual(len(second_client.generate_calls), 1)
+
+    async def test_auth_failure_does_not_refresh_browser_cookies_when_disabled(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(generate_error=RecoverableAuthError("auth failed"))
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        service.refresh_cookies_from_browser = Mock(return_value=False)
+        request = self.make_request()
+
+        text = await service.generate_text(
+            prompt="hello",
+            upstream_model="gemini-3-flash",
+            request=request,
+        )
+
+        self.assertEqual(text, "recovered reply")
+        service.refresh_cookies_from_browser.assert_not_called()
+
+    async def test_auth_failure_refreshes_browser_cookies_once_when_enabled(
+        self,
+    ) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            browser_cookie_refresh_enabled=True,
+            browser_cookie_refresh_on_auth_error=True,
+        )
+        service = GatewayService(settings)
+        first_client = FakeGeminiClient(generate_error=RecoverableAuthError("auth failed"))
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        service.refresh_cookies_from_browser = Mock(return_value=True)
+        request = self.make_request()
+
+        text = await service.generate_text(
+            prompt="hello",
+            upstream_model="gemini-3-flash",
+            request=request,
+        )
+
+        self.assertEqual(text, "recovered reply")
+        service.refresh_cookies_from_browser.assert_called_once_with()
+        self.assertEqual(service._build_client_from_cached_cookies.call_count, 2)
+
+    async def test_auth_failure_browser_refresh_failure_returns_original_error(
+        self,
+    ) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            browser_cookie_refresh_enabled=True,
+            browser_cookie_refresh_on_auth_error=True,
+        )
+        service = GatewayService(settings)
+        first_client = FakeGeminiClient(generate_error=RecoverableAuthError("auth failed"))
+        service._build_client_from_cached_cookies = Mock(return_value=first_client)
+        service.refresh_cookies_from_browser = Mock(return_value=False)
+        request = self.make_request()
+
+        with self.assertRaises(RecoverableAuthError):
+            await service.generate_text(
+                prompt="hello",
+                upstream_model="gemini-3-flash",
+                request=request,
+            )
+
+        service.refresh_cookies_from_browser.assert_called_once_with()
+        self.assertEqual(service._build_client_from_cached_cookies.call_count, 1)
 
     async def test_generate_stream_rebuilds_shared_client_after_initial_failure(
         self,
