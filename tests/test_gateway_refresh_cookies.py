@@ -345,7 +345,7 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             )
 
         output = stdout.getvalue()
-        self.assertIn("未检测到专用 Chrome profile 中的有效 Gemini 登录态", output)
+        self.assertIn("已连接专用 Chrome，但未检测到有效 Gemini 登录态", output)
         self.assertIn(
             "Google 可能会阻止由自动化框架控制的 Chrome 登录账号",
             output,
@@ -354,6 +354,7 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             '--user-data-dir="C:\\Users\\27355\\.gemini-api\\selenium-profile"',
             output,
         )
+        self.assertIn("不要关闭窗口", output)
         self.assertIn(
             "uv run --extra browser python -m gateway.refresh_cookies",
             output,
@@ -638,6 +639,37 @@ class TestGatewayRefreshCookies(unittest.TestCase):
         )
         self.assertIn(
             '--user-data-dir="C:\\Users\\27355\\.gemini-api\\selenium-profile"',
+            stdout.getvalue(),
+        )
+
+    def test_main_prints_remote_debugging_guidance_when_session_is_missing(
+        self,
+    ) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with (
+            patch(
+                "gateway.refresh_cookies.refresh_browser_cookies_to_file",
+                side_effect=BrowserCookieRefreshError(
+                    "未检测到专用 Chrome profile 的远程调试会话，请先按指引手动启动带 remote debugging 的 Chrome。",
+                    manual_login_required=True,
+                    debugging_session_required=True,
+                ),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                ["--profile-dir", r"C:\Users\27355\.gemini-api\selenium-profile"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("远程调试会话", stderr.getvalue())
+        self.assertIn("--remote-debugging-port=0", stdout.getvalue())
+        self.assertIn("不要关闭窗口", stdout.getvalue())
+        self.assertIn(
+            "再重新执行 refresh_cookies",
             stdout.getvalue(),
         )
 

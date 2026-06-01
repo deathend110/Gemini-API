@@ -991,6 +991,33 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
             "未检测到专用 Chrome profile 中的有效 Gemini 登录态。"
         )
 
+    def test_refresh_cookies_from_browser_returns_false_when_debugging_session_is_missing(
+        self,
+    ) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+            cookies_json_path=str(self.cookies_path),
+            browser_cookie_refresh_enabled=True,
+        )
+        service = GatewayService(settings)
+
+        with patch(
+            "gateway.refresh_cookies.refresh_browser_cookies_to_file",
+            side_effect=BrowserCookieRefreshError(
+                "未检测到专用 Chrome profile 的远程调试会话，请先按指引手动启动带 remote debugging 的 Chrome。",
+                manual_login_required=True,
+                debugging_session_required=True,
+            ),
+        ), patch("builtins.print") as print_mock:
+            refreshed = service.refresh_cookies_from_browser()
+
+        self.assertFalse(refreshed)
+        print_mock.assert_any_call(
+            "Warning: browser cookies require manual profile login: "
+            "未检测到专用 Chrome profile 的远程调试会话，请先按指引手动启动带 remote debugging 的 Chrome。"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,7 +35,10 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
             "复制 `gateway.refresh_cookies` 输出的完整 PowerShell 命令",
             readme,
         )
-        self.assertIn("关闭该专用 profile 的 Chrome 窗口", readme)
+        self.assertIn("保持该专用 Chrome 继续运行", readme)
+        self.assertIn("remote debugging", readme)
+        self.assertIn("live cookie", readme)
+        self.assertNotIn("关闭该专用 profile 的 Chrome 窗口", readme)
         self.assertIn("/v1/debug/models", readme)
         self.assertIn("curl http://127.0.0.1:8010/v1/debug/models", readme)
         self.assertNotIn("首次运行会打开一个独立 Chrome profile", readme)
@@ -56,6 +59,8 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
             "如未登录 Gemini，请先运行 refresh_cookies 并复制其输出的 PowerShell 命令",
             script,
         )
+        self.assertIn("保持该专用 Chrome 继续运行", script)
+        self.assertNotIn("关闭该专用 profile 的 Chrome 窗口", script)
 
     def test_start_gateway_script_keeps_refresh_step_before_gateway_start(self) -> None:
         script = (ROOT / "gateway" / "start_gateway.ps1").read_text(
@@ -69,6 +74,8 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
         )
         self.assertIn("uv run python -m gateway.main", script)
         self.assertIn("manual login is required", script)
+        self.assertIn("保持该专用 Chrome 继续运行", script)
+        self.assertNotIn("关闭该专用 profile 的 Chrome 窗口", script)
 
 
 if __name__ == "__main__":

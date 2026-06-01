@@ -317,8 +317,12 @@ def print_manual_login_guidance(
     *,
     profile_dir: str | Path,
     url: str = MANUAL_GEMINI_URL,
+    debugging_session_required: bool = False,
 ) -> None:
-    print("未检测到专用 Chrome profile 中的有效 Gemini 登录态。")
+    if debugging_session_required:
+        print("未检测到专用 Chrome profile 的 remote debugging 会话。")
+    else:
+        print("已连接专用 Chrome，但未检测到有效 Gemini 登录态。")
     print(
         "Google 可能会阻止由自动化框架控制的 Chrome 登录账号，因此请先手动启动专用 profile 并完成 Gemini 登录。"
     )
@@ -326,7 +330,7 @@ def print_manual_login_guidance(
     print(build_manual_chrome_launch_command(profile_dir, url=url))
     print("")
     print("请复制上面的 PowerShell 命令并手动运行。")
-    print("在打开的专用 Chrome 中完成 Gemini 登录后，再重新执行：")
+    print("在打开的专用 Chrome 中完成 Gemini 登录后，不要关闭窗口，再重新执行 refresh_cookies：")
     print("uv run --extra browser python -m gateway.refresh_cookies")
 
 
@@ -427,7 +431,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     except BrowserCookieRefreshError as exc:
         if exc.manual_login_required:
-            print_manual_login_guidance(profile_dir=profile_dir, url=args.url)
+            print_manual_login_guidance(
+                profile_dir=profile_dir,
+                url=args.url,
+                debugging_session_required=exc.debugging_session_required,
+            )
         elif exc.profile_in_use:
             print_profile_in_use_guidance(profile_dir=profile_dir)
         print(str(exc), file=sys.stderr)
