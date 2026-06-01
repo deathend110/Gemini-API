@@ -50,6 +50,21 @@ uv run python -m gateway.main
 - `. .\gateway\set_gateway_env.ps1` 前面的 `. ` 是 PowerShell dot-source 语法，用于把环境变量写入当前会话
 - 启动网关时统一使用 `uv run python -m gateway.main`，不要直接使用 conda/base 环境里的 `python`
 
+如果本机浏览器已经登录 Gemini Web，推荐先刷新 `cookies.json` 再启动：
+
+```powershell
+uv sync --extra browser
+. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"
+uv run --extra browser python -m gateway.refresh_cookies
+uv run python -m gateway.main
+```
+
+也可以直接用一键脚本：
+
+```powershell
+.\gateway\start_gateway.ps1 -ApiKey "your-local-key"
+```
+
 启动后终端会输出：
 
 - `Base URL`
@@ -124,6 +139,10 @@ curl http://127.0.0.1:8010/health
 | `GEMINI_GATEWAY_DEFAULT_MODEL` | 默认模型 | `gemini-3-flash` |
 | `GEMINI_GATEWAY_DEFAULT_REASONING_EFFORT` | 默认推理强度 | `standard` |
 | `GEMINI_GATEWAY_PROXY` | Gemini 上游请求代理 | `http://127.0.0.1:10090/` |
+| `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED` | 是否允许浏览器 Cookie 刷新 | `false` |
+| `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR` | 认证失败时是否尝试刷新浏览器 Cookie | `false` |
+| `GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE` | 指定浏览器来源 | 空 |
+| `GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN` | 浏览器 Cookie 域名 | `.google.com` |
 | `GEMINI_GATEWAY_ACCOUNT_PROBE_ENABLED` | 是否启动账户能力探测 | `true` |
 | `GEMINI_GATEWAY_ACCOUNT_STRICT_MODE` | 是否要求启动时满足账户能力门槛 | `false` |
 | `GEMINI_GATEWAY_ACCOUNT_REQUIRED_LEVEL` | strict mode 的能力要求 | `basic` |
@@ -269,3 +288,4 @@ AstrBot 侧按 OpenAI 服务接入：
 - `tools` 是兼容层实现，依赖 Gemini 按约定输出 JSON
 - 如果请求明显变慢，优先检查代理、Gemini Web 登录态、客户端传入的历史消息长度
 - 如果 `cookies.json` 失效，请重新从 Gemini Web 登录态中获取 Cookie
+- 如果想在认证失败时自动从浏览器刷新 Cookie，可以显式开启 `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED` 和 `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR`
