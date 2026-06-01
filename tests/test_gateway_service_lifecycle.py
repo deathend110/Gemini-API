@@ -432,6 +432,32 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(first_client.generate_calls), 1)
         self.assertEqual(len(second_client.generate_calls), 1)
 
+    async def test_generate_text_logs_rebuild_reason_before_retry(self) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(generate_error=RecoverableTimeoutError("timeout"))
+        second_client = FakeGeminiClient(text_result="recovered reply")
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        with patch("builtins.print") as print_mock:
+            text = await service.generate_text(
+                prompt="hello",
+                upstream_model="gemini-3-flash",
+                request=request,
+            )
+
+        self.assertEqual(text, "recovered reply")
+        printed = "\n".join(
+            call.args[0]
+            for call in print_mock.call_args_list
+            if call.args and isinstance(call.args[0], str)
+        )
+        self.assertIn("Rebuilding shared Gemini client after text failure", printed)
+        self.assertIn("StubTimeoutError", printed)
+        self.assertIn("timeout", printed)
+
     async def test_auth_failure_does_not_refresh_browser_cookies_when_disabled(
         self,
     ) -> None:
@@ -597,6 +623,37 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(second_client.init_calls), 1)
         self.assertEqual(len(first_client.stream_calls), 1)
         self.assertEqual(len(second_client.stream_calls), 1)
+
+    async def test_generate_stream_logs_rebuild_reason_before_retry(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        first_client = FakeGeminiClient(stream_error=RecoverableTimeoutError("stream timeout"))
+        second_client = FakeGeminiClient(stream_chunks=["re", "covered"])
+        service._build_client_from_cached_cookies = Mock(
+            side_effect=[first_client, second_client]
+        )
+        request = self.make_request()
+
+        with patch("builtins.print") as print_mock:
+            chunks = [
+                chunk
+                async for chunk in service.generate_stream(
+                    prompt="hello",
+                    upstream_model="gemini-3-flash",
+                    request=request,
+                )
+            ]
+
+        self.assertEqual(chunks, ["re", "covered"])
+        printed = "\n".join(
+            call.args[0]
+            for call in print_mock.call_args_list
+            if call.args and isinstance(call.args[0], str)
+        )
+        self.assertIn("Rebuilding shared Gemini client after stream failure", printed)
+        self.assertIn("StubTimeoutError", printed)
+        self.assertIn("stream timeout", printed)
 
     async def test_flush_runtime_cookies_drops_stale_cached_cookie_values(self) -> None:
         service = GatewayService(self.settings)

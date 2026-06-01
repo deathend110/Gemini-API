@@ -835,6 +835,11 @@ class GatewayService:
                     return response.text
                 except Exception as exc:
                     if attempt == 0 and self._should_rebuild_shared_client(exc):
+                        self._log_shared_client_rebuild(
+                            phase="text",
+                            upstream_model=upstream_model,
+                            exc=exc,
+                        )
                         refreshed_from_browser = False
                         if self._should_refresh_browser_cookies_after_error(exc):
                             refreshed_from_browser = self.refresh_cookies_from_browser()
@@ -882,6 +887,11 @@ class GatewayService:
                         and not yielded_any_chunk
                         and self._should_rebuild_shared_client(exc)
                     ):
+                        self._log_shared_client_rebuild(
+                            phase="stream",
+                            upstream_model=upstream_model,
+                            exc=exc,
+                        )
                         refreshed_from_browser = False
                         if self._should_refresh_browser_cookies_after_error(exc):
                             refreshed_from_browser = self.refresh_cookies_from_browser()
@@ -1173,6 +1183,19 @@ class GatewayService:
 
     def _should_rebuild_shared_client(self, exc: Exception) -> bool:
         return isinstance(exc, (AuthError, TimeoutError, APIError, GeminiError))
+
+    def _log_shared_client_rebuild(
+        self,
+        *,
+        phase: str,
+        upstream_model: str,
+        exc: Exception,
+    ) -> None:
+        print(
+            "Rebuilding shared Gemini client after "
+            f"{phase} failure for model={upstream_model}: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
     def _should_refresh_browser_cookies_after_error(self, exc: Exception) -> bool:
         return (
