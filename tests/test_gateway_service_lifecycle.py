@@ -517,20 +517,51 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(rebuilt_client.secure_1psid, "psid-value")
         self.assertEqual(rebuilt_client.secure_1psidts, "fresh-psidts-value")
-        self.assertEqual(
-            rebuilt_client.cookies,
-            {
-                "NID": "fresh-nid-value",
-                "SIDCC": "sidcc-value",
-            },
-        )
+        self.assertIsNone(rebuilt_client.cookies)
         self.assertEqual(
             service.get_cached_cookies()["__Secure-1PSIDTS"],
             "fresh-psidts-value",
         )
+        self.assertEqual(service.get_cached_cookies()["NID"], "fresh-nid-value")
         self.assertEqual(service.get_cached_cookies()["SIDCC"], "sidcc-value")
         self.assertEqual(rebuilt_generation, 2)
         self.assertEqual(failed_client.close_calls, 1)
+
+    def test_build_client_uses_only_auth_cookies_to_avoid_domain_conflicts(
+        self,
+    ) -> None:
+        service = GatewayService(self.settings)
+        service._cached_cookies = {
+            "__Secure-1PSID": "psid-value",
+            "__Secure-1PSIDTS": "psidts-value",
+            "AEC": "aec-value",
+            "NID": "nid-value",
+        }
+
+        class RecordingGeminiClient:
+            def __init__(
+                self,
+                *,
+                secure_1psid: str,
+                secure_1psidts: str,
+                proxy: str,
+            ) -> None:
+                self.secure_1psid = secure_1psid
+                self.secure_1psidts = secure_1psidts
+                self.proxy = proxy
+                self.cookies: dict[str, str] | None = None
+
+        active_gemini_module = sys.modules["gemini_webapi"]
+        with patch.object(
+            active_gemini_module,
+            "GeminiClient",
+            RecordingGeminiClient,
+        ):
+            client = service._build_client_from_cached_cookies()
+
+        self.assertEqual(client.secure_1psid, "psid-value")
+        self.assertEqual(client.secure_1psidts, "psidts-value")
+        self.assertIsNone(client.cookies)
 
     async def test_generate_text_rebuild_does_not_close_client_held_by_other_request(
         self,

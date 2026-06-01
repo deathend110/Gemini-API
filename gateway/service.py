@@ -51,7 +51,7 @@ class GatewayServiceError(Exception):
 CANONICAL_MODELS: tuple[GatewayModelSpec, ...] = (
     GatewayModelSpec("gemini-3.1-pro", "gemini-3-pro"),
     GatewayModelSpec("gemini-3.5-flash", "gemini-3-flash"),
-    GatewayModelSpec("gemini-3.1-flash-lite", "3.1 Flash-Lite"),
+    GatewayModelSpec("gemini-3.1-flash-lite", "gemini-3-flash"),
 )
 
 MODEL_ALIASES: dict[str, str] = {
@@ -792,18 +792,11 @@ class GatewayService:
         cookies = self.get_cached_cookies()
         psid = cookies.get("__Secure-1PSID")
         psidts = cookies.get("__Secure-1PSIDTS", "")
-        extra_cookies = {
-            name: value
-            for name, value in cookies.items()
-            if name not in {"__Secure-1PSID", "__Secure-1PSIDTS"}
-        }
         client = GeminiClient(
             secure_1psid=psid,
             secure_1psidts=psidts,
             proxy=self.settings.proxy,
         )
-        if extra_cookies:
-            client.cookies = extra_cookies
         return client
 
     async def warmup(self) -> None:

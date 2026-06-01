@@ -99,6 +99,13 @@ class TestGatewayApi(unittest.TestCase):
             ],
         )
 
+    def test_flash_lite_alias_uses_available_flash_upstream_model(self) -> None:
+        model = self.app.state.gateway_service.resolve_model(
+            "gemini-3.1-flash-lite"
+        )
+
+        self.assertEqual(model.upstream_name, "gemini-3-flash")
+
     def test_account_status_requires_bearer_auth(self) -> None:
         response = self.client.get("/v1/account/status")
 
