@@ -1,4 +1,5 @@
 import unittest
+import os
 import sys
 import types
 from unittest.mock import patch
@@ -164,6 +165,36 @@ class TestGatewayAccountStatus(unittest.TestCase):
                         "GEMINI_GATEWAY_COOKIE_PERSIST_INTERVAL_SECONDS",
                     ):
                         GatewaySettings()
+
+    def test_gateway_settings_exposes_v13_browser_cookie_defaults(self) -> None:
+        settings = GatewaySettings(
+            api_key="test-key",
+            proxy="http://127.0.0.1:7890",
+        )
+
+        self.assertFalse(settings.browser_cookie_refresh_enabled)
+        self.assertFalse(settings.browser_cookie_refresh_on_auth_error)
+        self.assertEqual(settings.browser_cookie_source, "")
+        self.assertEqual(settings.browser_cookie_domain, ".google.com")
+
+    def test_gateway_settings_reads_browser_cookie_env(self) -> None:
+        env = {
+            "GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED": "true",
+            "GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR": "true",
+            "GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE": "edge",
+            "GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN": "gemini.google.com",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            settings = GatewaySettings(
+                api_key="test-key",
+                proxy="http://127.0.0.1:7890",
+            )
+
+        self.assertTrue(settings.browser_cookie_refresh_enabled)
+        self.assertTrue(settings.browser_cookie_refresh_on_auth_error)
+        self.assertEqual(settings.browser_cookie_source, "edge")
+        self.assertEqual(settings.browser_cookie_domain, "gemini.google.com")
 
 
 if __name__ == "__main__":

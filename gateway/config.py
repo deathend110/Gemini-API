@@ -125,6 +125,30 @@ class GatewaySettings:
             "basic",
         )
     )
+    browser_cookie_refresh_enabled: bool = field(
+        default_factory=lambda: _get_env_bool(
+            "GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED",
+            False,
+        )
+    )
+    browser_cookie_refresh_on_auth_error: bool = field(
+        default_factory=lambda: _get_env_bool(
+            "GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR",
+            False,
+        )
+    )
+    browser_cookie_source: str = field(
+        default_factory=lambda: _get_env(
+            "GEMINI_GATEWAY_BROWSER_COOKIE_SOURCE",
+            "",
+        )
+    )
+    browser_cookie_domain: str = field(
+        default_factory=lambda: _get_env(
+            "GEMINI_GATEWAY_BROWSER_COOKIE_DOMAIN",
+            ".google.com",
+        )
+    )
     proxy: str = ""
     api_key: str = ""
 
