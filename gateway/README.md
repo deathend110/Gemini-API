@@ -51,8 +51,12 @@ uv run python -m gateway.main
 - 启动网关时统一使用 `uv run python -m gateway.main`，不要直接使用 conda/base 环境里的 `python`
 
 如果需要刷新 `cookies.json`，推荐使用手动启动专用 Chrome profile 的流程。
-当前实现会通过 remote debugging 从正在运行的专用 Chrome 提取 live cookie。
-首次运行 `gateway.refresh_cookies` 时，如果未检测到 remote debugging 会话或未检测到有效 Gemini 登录态，脚本会打印一条完整可复制的 PowerShell 命令。请复制 `gateway.refresh_cookies` 输出的完整 PowerShell 命令，手动启动专用 Chrome profile 并完成 Gemini 登录，然后保持该专用 Chrome 继续运行，再重新执行刷新命令。
+当前实现会从正在运行的专用 Chrome 提取当前登录态。
+首次运行 `gateway.refresh_cookies` 时：
+
+- 如果缺少调试会话，请先关闭该专用 profile 当前已普通打开的 Chrome 窗口，再复制脚本打印出的 PowerShell 命令重新启动
+- 如果已连上专用 Chrome 但还没有有效 Gemini 登录态，请直接在该窗口中完成登录
+- 登录完成后保持该专用 Chrome 继续运行，不要关闭窗口，再重新执行刷新命令
 
 ```powershell
 uv sync --extra browser
@@ -86,8 +90,8 @@ curl http://127.0.0.1:8010/health
 1. 执行 `uv sync --extra browser`
 2. 执行 `. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"`
 3. 执行 `uv run --extra browser python -m gateway.refresh_cookies`
-4. 如果脚本打印 PowerShell 启动命令，就复制它，手动打开专用 Chrome profile 并登录 Gemini
-5. 登录完成后，保持该专用 Chrome 继续运行，不要关闭窗口
+4. 如果脚本提示缺少调试会话，先关闭该专用 profile 当前已普通打开的 Chrome 窗口，再复制它打印的 PowerShell 启动命令
+5. 在专用 Chrome 中完成 Gemini 登录后，保持该专用 Chrome 继续运行，不要关闭窗口
 6. 再次执行 `uv run --extra browser python -m gateway.refresh_cookies`
 7. 看到 `Browser cookies refreshed:` 后，再执行 `uv run python -m gateway.main`
 
@@ -96,7 +100,7 @@ curl http://127.0.0.1:8010/health
 网关通过本地 `cookies.json` 读取 Gemini Web 登录态。至少需要 `__Secure-1PSID`，建议同时包含 `__Secure-1PSIDTS`。
 
 `gateway.refresh_cookies` 会从专用 Chrome profile 读取 Gemini Web 登录态，不会复用你的日常浏览器 profile，也不会要求在配置中保存 Google 账号密码。
-当前实现通过 remote debugging 从正在运行的专用 Chrome 提取 live cookie，因此在执行 `uv run --extra browser python -m gateway.refresh_cookies` 时，应保持该专用 Chrome 继续运行，而不是先关闭窗口。
+推荐主路径是：通过 `gateway.refresh_cookies` 打印出的命令启动专用 Chrome，登录后保持该窗口继续运行，再重新执行 `gateway.refresh_cookies` 完成提取；只有在缺少调试会话且同 profile 已被普通方式打开时，才需要先关闭那个普通打开的窗口。
 
 仓库根目录的 `cookies.json` 示例：
 

@@ -360,6 +360,25 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             output,
         )
 
+    def test_print_manual_login_guidance_for_missing_debugging_session_requires_restart(
+        self,
+    ) -> None:
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            print_manual_login_guidance(
+                profile_dir=Path(r"C:\Users\27355\.gemini-api\selenium-profile"),
+                url="https://gemini.google.com/app",
+                debugging_session_required=True,
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("未检测到专用 Chrome profile 的 remote debugging 会话", output)
+        self.assertIn("请先关闭该 profile 当前已普通打开的 Chrome 窗口", output)
+        self.assertIn("--remote-debugging-port=0", output)
+        self.assertIn("不要关闭窗口", output)
+        self.assertIn("再重新执行 refresh_cookies", output)
+
     def test_refresh_browser_cookies_writes_gateway_compatible_json_without_leaking_values(
         self,
     ) -> None:
@@ -667,6 +686,7 @@ class TestGatewayRefreshCookies(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("远程调试会话", stderr.getvalue())
         self.assertIn("--remote-debugging-port=0", stdout.getvalue())
+        self.assertIn("请先关闭该 profile 当前已普通打开的 Chrome 窗口", stdout.getvalue())
         self.assertIn("不要关闭窗口", stdout.getvalue())
         self.assertIn(
             "再重新执行 refresh_cookies",

@@ -321,15 +321,21 @@ def print_manual_login_guidance(
 ) -> None:
     if debugging_session_required:
         print("未检测到专用 Chrome profile 的 remote debugging 会话。")
+        print(
+            "如果这个专用 profile 已经被普通方式打开，请先关闭该 profile 当前已普通打开的 Chrome 窗口，再使用下面的命令重新启动。"
+        )
     else:
         print("已连接专用 Chrome，但未检测到有效 Gemini 登录态。")
-    print(
-        "Google 可能会阻止由自动化框架控制的 Chrome 登录账号，因此请先手动启动专用 profile 并完成 Gemini 登录。"
-    )
+        print(
+            "Google 可能会阻止由自动化框架控制的 Chrome 登录账号，因此请在这个专用 Chrome 中完成 Gemini 登录。"
+        )
     print("")
     print(build_manual_chrome_launch_command(profile_dir, url=url))
     print("")
-    print("请复制上面的 PowerShell 命令并手动运行。")
+    if debugging_session_required:
+        print("请复制上面的 PowerShell 命令并手动运行。")
+    else:
+        print("如需重新打开专用 Chrome，可复制上面的 PowerShell 命令并手动运行。")
     print("在打开的专用 Chrome 中完成 Gemini 登录后，不要关闭窗口，再重新执行 refresh_cookies：")
     print("uv run --extra browser python -m gateway.refresh_cookies")
 

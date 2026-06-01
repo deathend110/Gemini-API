@@ -17,8 +17,10 @@ param(
 )
 
 # If refresh_cookies reports that manual login is required, copy the printed
-# PowerShell command, sign in to Gemini in the dedicated profile, keep that
-# Chrome window running, then rerun this script.
+# PowerShell command. If the same profile was opened normally, close that
+# Chrome window first, then relaunch with the printed command. After sign-in,
+# keep that Chrome window running and rerun this script.
+# 如提示缺少调试会话，请先关闭当前已普通打开的同 profile Chrome 窗口，再用打印出的命令重新启动。
 # 登录完成后保持该专用 Chrome 继续运行，不要关闭窗口，再重新执行 refresh_cookies。
 
 $ErrorActionPreference = "Stop"
