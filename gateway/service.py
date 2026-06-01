@@ -838,6 +838,8 @@ class GatewayService:
                         self._log_shared_client_rebuild(
                             phase="text",
                             upstream_model=upstream_model,
+                            request=request,
+                            prompt=prompt,
                             exc=exc,
                         )
                         refreshed_from_browser = False
@@ -890,6 +892,8 @@ class GatewayService:
                         self._log_shared_client_rebuild(
                             phase="stream",
                             upstream_model=upstream_model,
+                            request=request,
+                            prompt=prompt,
                             exc=exc,
                         )
                         refreshed_from_browser = False
@@ -1189,12 +1193,22 @@ class GatewayService:
         *,
         phase: str,
         upstream_model: str,
+        request: ChatCompletionRequest,
+        prompt: str,
         exc: Exception,
     ) -> None:
+        roles = ",".join(
+            message.role
+            for message in request.messages
+            if isinstance(message.role, str)
+        )
+        tools_count = len(request.tools or [])
         print(
             "Rebuilding shared Gemini client after "
             f"{phase} failure for model={upstream_model}: "
-            f"{type(exc).__name__}: {exc}"
+            f"{type(exc).__name__}: {exc} "
+            f"[tools={tools_count} messages={len(request.messages)} "
+            f"roles={roles} prompt_len={len(prompt)} stream={request.stream}]"
         )
 
     def _should_refresh_browser_cookies_after_error(self, exc: Exception) -> bool:

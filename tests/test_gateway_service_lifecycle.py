@@ -457,6 +457,8 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Rebuilding shared Gemini client after text failure", printed)
         self.assertIn("StubTimeoutError", printed)
         self.assertIn("timeout", printed)
+        self.assertIn("tools=0", printed)
+        self.assertIn("messages=1", printed)
 
     async def test_auth_failure_does_not_refresh_browser_cookies_when_disabled(
         self,
@@ -654,6 +656,8 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Rebuilding shared Gemini client after stream failure", printed)
         self.assertIn("StubTimeoutError", printed)
         self.assertIn("stream timeout", printed)
+        self.assertIn("tools=0", printed)
+        self.assertIn("messages=1", printed)
 
     async def test_flush_runtime_cookies_drops_stale_cached_cookie_values(self) -> None:
         service = GatewayService(self.settings)
