@@ -51,7 +51,7 @@ uv run python -m gateway.main
 - 启动网关时统一使用 `uv run python -m gateway.main`，不要直接使用 conda/base 环境里的 `python`
 
 如果需要刷新 `cookies.json`，推荐使用手动启动专用 Chrome profile 的流程。
-首次运行 `gateway.refresh_cookies` 时，如果未检测到有效 Gemini 登录态，脚本会打印一条完整可复制的 PowerShell 命令。请复制 `gateway.refresh_cookies` 输出的完整 PowerShell 命令，手动启动专用 Chrome profile 并完成 Gemini 登录，然后重新运行刷新命令：
+首次运行 `gateway.refresh_cookies` 时，如果未检测到有效 Gemini 登录态，脚本会打印一条完整可复制的 PowerShell 命令。请复制 `gateway.refresh_cookies` 输出的完整 PowerShell 命令，手动启动专用 Chrome profile 并完成 Gemini 登录，然后关闭该专用 profile 的 Chrome 窗口，再重新运行刷新命令。
 
 ```powershell
 uv sync --extra browser
@@ -80,11 +80,22 @@ uv run python -m gateway.main
 curl http://127.0.0.1:8010/health
 ```
 
+推荐启动顺序：
+
+1. 执行 `uv sync --extra browser`
+2. 执行 `. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"`
+3. 执行 `uv run --extra browser python -m gateway.refresh_cookies`
+4. 如果脚本打印 PowerShell 启动命令，就复制它，手动打开专用 Chrome profile 并登录 Gemini
+5. 登录完成后，关闭该专用 profile 的 Chrome 窗口
+6. 再次执行 `uv run --extra browser python -m gateway.refresh_cookies`
+7. 看到 `Browser cookies refreshed:` 后，再执行 `uv run python -m gateway.main`
+
 ## 3. Cookies
 
 网关通过本地 `cookies.json` 读取 Gemini Web 登录态。至少需要 `__Secure-1PSID`，建议同时包含 `__Secure-1PSIDTS`。
 
 `gateway.refresh_cookies` 会从专用 Chrome profile 读取本地登录态，不会复用你的日常浏览器 profile，也不会要求在配置中保存 Google 账号密码。
+当前实现读取的是 profile 目录中的本地 Cookie 数据库，因此在执行 `uv run --extra browser python -m gateway.refresh_cookies` 之前，需要先关闭该专用 profile 的 Chrome 窗口；否则 Windows 可能会因为文件占用而报 `Permission denied`。
 
 仓库根目录的 `cookies.json` 示例：
 
@@ -182,7 +193,29 @@ curl http://127.0.0.1:8010/v1/account/status `
   -H "Authorization: Bearer your-local-key"
 ```
 
-### 5.3 聊天补全
+### 5.3 动态模型调试
+
+如果你想查看 Gemini Web 当前实际解析到的动态模型注册表，可以请求：
+
+```powershell
+curl http://127.0.0.1:8010/v1/debug/models `
+  -H "Authorization: Bearer your-local-key"
+```
+
+返回内容会包含：
+
+- `model_id`
+- `model_name`
+- `display_name`
+- `description`
+- `is_available`
+- `advanced_only`
+- `capacity`
+- `capacity_field`
+
+如果返回 `debug_models_unavailable`，通常说明网关当前还没有完成一次成功的 Gemini client warmup。
+
+### 5.4 聊天补全
 
 ```powershell
 curl http://127.0.0.1:8010/v1/chat/completions `
@@ -191,7 +224,7 @@ curl http://127.0.0.1:8010/v1/chat/completions `
   -d "{\"model\":\"gemini-3-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
 ```
 
-### 5.4 流式输出
+### 5.5 流式输出
 
 ```powershell
 curl http://127.0.0.1:8010/v1/chat/completions `

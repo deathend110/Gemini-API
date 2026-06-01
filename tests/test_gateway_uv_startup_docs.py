@@ -35,6 +35,9 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
             "复制 `gateway.refresh_cookies` 输出的完整 PowerShell 命令",
             readme,
         )
+        self.assertIn("关闭该专用 profile 的 Chrome 窗口", readme)
+        self.assertIn("/v1/debug/models", readme)
+        self.assertIn("curl http://127.0.0.1:8010/v1/debug/models", readme)
         self.assertNotIn("首次运行会打开一个独立 Chrome profile", readme)
         self.assertNotIn("Selenium", readme)
 
