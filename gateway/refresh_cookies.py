@@ -264,21 +264,34 @@ def load_browser_cookies_via_cdp(
     )
     websocket = None
     try:
-        websocket = session.ws_connect(endpoint.browser_websocket_url)
-        websocket.send_json({"id": request_id, "method": "Storage.getCookies"})
-        while True:
-            response = websocket.recv_json()
-            if not isinstance(response, dict):
-                continue
-            if response.get("id") != request_id:
-                continue
-            break
-    except BrowserCookieRefreshError:
-        raise
-    except Exception as exc:
-        raise BrowserCookieRefreshError(
-            f"Failed to query Chrome DevTools cookies: {exc}"
-        ) from exc
+        try:
+            websocket = session.ws_connect(endpoint.browser_websocket_url)
+        except BrowserCookieRefreshError:
+            raise
+        except Exception as exc:
+            raise BrowserCookieRefreshError(
+                "专用 Chrome profile 的远程调试会话已失效或无法连接，请重新按指引启动带 remote debugging 的 Chrome。",
+                manual_login_required=True,
+                debugging_session_required=True,
+            ) from exc
+
+        try:
+            websocket.send_json({"id": request_id, "method": "Storage.getCookies"})
+            while True:
+                response = websocket.recv_json()
+                if not isinstance(response, dict):
+                    continue
+                if response.get("id") != request_id:
+                    continue
+                break
+        except BrowserCookieRefreshError:
+            raise
+        except Exception as exc:
+            raise BrowserCookieRefreshError(
+                "专用 Chrome profile 的远程调试会话已失效或不可用，请重新按指引启动带 remote debugging 的 Chrome。",
+                manual_login_required=True,
+                debugging_session_required=True,
+            ) from exc
     finally:
         if websocket is not None:
             websocket.close()

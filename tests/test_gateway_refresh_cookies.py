@@ -553,6 +553,30 @@ class TestGatewayRefreshCookies(unittest.TestCase):
 
         self.assertTrue(ctx.exception.manual_login_required)
 
+    def test_load_browser_cookies_via_cdp_maps_ws_connect_failure_to_debugging_session_recovery(
+        self,
+    ) -> None:
+        endpoint = DevToolsEndpoint(
+            port=58472,
+            browser_websocket_url="ws://127.0.0.1:58472/devtools/browser/1234",
+            version_url="http://127.0.0.1:58472/json/version",
+        )
+        fake_session = Mock()
+        fake_session.ws_connect.side_effect = ConnectionError("actively refused")
+
+        with self.assertRaisesRegex(
+            BrowserCookieRefreshError,
+            "远程调试会话",
+        ) as ctx:
+            load_browser_cookies_via_cdp(
+                endpoint=endpoint,
+                session_factory=lambda: fake_session,
+            )
+
+        self.assertTrue(ctx.exception.manual_login_required)
+        self.assertTrue(ctx.exception.debugging_session_required)
+        fake_session.close.assert_called_once()
+
     def test_load_browser_cookies_via_cdp_raises_when_matching_response_has_error(
         self,
     ) -> None:

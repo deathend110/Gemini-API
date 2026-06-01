@@ -71,6 +71,12 @@ uv run python -m gateway.main
 .\gateway\start_gateway.ps1 -ApiKey "your-local-key"
 ```
 
+`start_gateway.ps1` 的默认行为已经改成：
+
+- 如已有可用 `cookies.json`（至少包含 `__Secure-1PSID`），直接启动网关，不强制先做 live refresh
+- 缺少可用 `cookies.json` 时，才会自动进入 `gateway.refresh_cookies` 流程
+- 如果只是想主动刷新登录态，也可以跳过一键脚本，单独执行 `gateway.refresh_cookies`
+
 启动后终端会输出：
 
 - `Base URL`
@@ -85,15 +91,22 @@ uv run python -m gateway.main
 curl http://127.0.0.1:8010/health
 ```
 
-推荐启动顺序：
+推荐启动顺序分两种：
 
-1. 执行 `uv sync --extra browser`
-2. 执行 `. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"`
-3. 执行 `uv run --extra browser python -m gateway.refresh_cookies`
-4. 如果脚本提示缺少调试会话，先关闭该专用 profile 当前已普通打开的 Chrome 窗口，再复制它打印的 PowerShell 启动命令
-5. 在专用 Chrome 中完成 Gemini 登录后，保持该专用 Chrome 继续运行，不要关闭窗口
-6. 再次执行 `uv run --extra browser python -m gateway.refresh_cookies`
-7. 看到 `Browser cookies refreshed:` 后，再执行 `uv run python -m gateway.main`
+1. 如已有可用 `cookies.json`：
+   执行 `uv sync`
+   执行 `. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"`
+   执行 `uv run python -m gateway.main`
+   或直接执行 `.\gateway\start_gateway.ps1 -ApiKey "your-local-key"`
+2. 如缺少可用 `cookies.json`：
+   执行 `uv sync --extra browser`
+   执行 `. .\gateway\set_gateway_env.ps1 -ApiKey "your-local-key"`
+   执行 `uv run --extra browser python -m gateway.refresh_cookies`
+   如果脚本提示缺少调试会话，先关闭该专用 profile 当前已普通打开的 Chrome 窗口，再复制它打印的 PowerShell 启动命令
+   在专用 Chrome 中完成 Gemini 登录后，保持该专用 Chrome 继续运行，不要关闭窗口
+   再次执行 `uv run --extra browser python -m gateway.refresh_cookies`
+   看到 `Browser cookies refreshed:` 后，再执行 `uv run python -m gateway.main`
+   这一路径也可以通过 `.\gateway\start_gateway.ps1 -ApiKey "your-local-key"` 触发；它会在缺少可用 `cookies.json` 时再按手动 profile 流程刷新
 
 ## 3. Cookies
 
@@ -161,9 +174,9 @@ curl http://127.0.0.1:8010/health
 | `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ENABLED` | 是否允许浏览器 Cookie 刷新 | `false` |
 | `GEMINI_GATEWAY_BROWSER_COOKIE_REFRESH_ON_AUTH_ERROR` | 认证失败时是否尝试刷新浏览器 Cookie | `false` |
 | `GEMINI_GATEWAY_BROWSER_PROFILE_DIR` | 专用 Chrome profile 路径 | 用户目录下 `.gemini-api\selenium-profile` |
-| `GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS` | 首次登录等待秒数 | `300` |
-| `GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS` | Cookie 检查间隔秒数 | `2` |
-| `GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS` | Gemini 页面加载超时秒数 | `60` |
+| `GEMINI_GATEWAY_BROWSER_LOGIN_WAIT_SECONDS` | 兼容保留参数，当前 live-cookie 刷新流程不使用该等待时长 | `300` |
+| `GEMINI_GATEWAY_BROWSER_POLL_INTERVAL_SECONDS` | 兼容保留参数，当前 live-cookie 刷新流程不使用该轮询间隔 | `2` |
+| `GEMINI_GATEWAY_BROWSER_PAGE_LOAD_TIMEOUT_SECONDS` | 兼容保留参数，当前 live-cookie 刷新流程不使用该页面加载超时 | `60` |
 | `GEMINI_GATEWAY_BROWSER_HEADLESS` | 兼容保留字段，当前手动 profile 登录流程不会使用 | `false` |
 | `GEMINI_GATEWAY_ACCOUNT_PROBE_ENABLED` | 是否启动账户能力探测 | `true` |
 | `GEMINI_GATEWAY_ACCOUNT_STRICT_MODE` | 是否要求启动时满足账户能力门槛 | `false` |

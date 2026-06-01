@@ -16,6 +16,61 @@ param(
     [bool]$BrowserHeadless = $false
 )
 
+function Get-GatewayCookieValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [object]$CookieData,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($null -eq $CookieData) {
+        return $null
+    }
+
+    if ($CookieData -is [System.Collections.IDictionary]) {
+        return $CookieData[$Name]
+    }
+
+    $property = $CookieData.PSObject.Properties[$Name]
+    if ($null -ne $property) {
+        return $property.Value
+    }
+
+    return $null
+}
+
+function Test-GatewayCookiesJsonUsable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $false
+    }
+
+    $cookies = $raw
+    if ($null -ne $raw) {
+        $cookiesProperty = $raw.PSObject.Properties["cookies"]
+        if ($null -ne $cookiesProperty) {
+            $cookies = $cookiesProperty.Value
+        }
+    }
+
+    $psid = Get-GatewayCookieValue -CookieData $cookies -Name "__Secure-1PSID"
+    return ($psid -is [string]) -and (-not [string]::IsNullOrWhiteSpace($psid))
+}
+
 # If refresh_cookies reports that manual login is required, copy the printed
 # PowerShell command. If the same profile was opened normally, close that
 # Chrome window first, then relaunch with the printed command. After sign-in,
@@ -41,6 +96,15 @@ $ErrorActionPreference = "Stop"
   -BrowserPageLoadTimeoutSeconds $BrowserPageLoadTimeoutSeconds `
   -BrowserHeadless $BrowserHeadless
 
-uv sync --extra browser
-uv run --extra browser python -m gateway.refresh_cookies
+uv sync
+
+if (Test-GatewayCookiesJsonUsable -Path $CookiesJsonPath) {
+    Write-Host "Detected usable cookies.json at $CookiesJsonPath; 跳过 refresh_cookies，直接启动网关。"
+}
+else {
+    Write-Host "缺少可用 cookies.json，先尝试从专用 Chrome profile 刷新登录态。"
+    uv sync --extra browser
+    uv run --extra browser python -m gateway.refresh_cookies
+}
+
 uv run python -m gateway.main
