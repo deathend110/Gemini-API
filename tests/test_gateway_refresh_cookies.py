@@ -87,6 +87,74 @@ class TestGatewayRefreshCookies(unittest.TestCase):
         self.assertTrue(ctx.exception.manual_login_required)
         self.assertTrue(ctx.exception.debugging_session_required)
 
+    def test_load_devtools_endpoint_from_profile_rejects_single_line_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / "DevToolsActivePort").write_text(
+                "9222\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(BrowserCookieRefreshError) as ctx:
+                load_devtools_endpoint_from_profile(profile_dir)
+
+        self.assertTrue(ctx.exception.manual_login_required)
+        self.assertTrue(ctx.exception.debugging_session_required)
+
+    def test_load_devtools_endpoint_from_profile_rejects_non_numeric_port(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / "DevToolsActivePort").write_text(
+                "not-a-port\n/devtools/browser/test-browser-id\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(BrowserCookieRefreshError) as ctx:
+                load_devtools_endpoint_from_profile(profile_dir)
+
+        self.assertTrue(ctx.exception.manual_login_required)
+        self.assertTrue(ctx.exception.debugging_session_required)
+
+    def test_load_devtools_endpoint_from_profile_rejects_ws_path_without_leading_slash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / "DevToolsActivePort").write_text(
+                "9222\ndevtools/browser/test-browser-id\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(BrowserCookieRefreshError) as ctx:
+                load_devtools_endpoint_from_profile(profile_dir)
+
+        self.assertTrue(ctx.exception.manual_login_required)
+        self.assertTrue(ctx.exception.debugging_session_required)
+
+    def test_load_devtools_endpoint_from_profile_rejects_missing_ws_path_line(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / "DevToolsActivePort").write_text(
+                "9222\n\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(BrowserCookieRefreshError) as ctx:
+                load_devtools_endpoint_from_profile(profile_dir)
+
+        self.assertTrue(ctx.exception.manual_login_required)
+        self.assertTrue(ctx.exception.debugging_session_required)
+
     def test_collect_google_cookies_filters_non_google_domains(self) -> None:
         cookies = collect_google_cookies(
             [

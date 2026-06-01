@@ -84,13 +84,26 @@ def load_devtools_endpoint_from_profile(profile_dir: str | Path) -> DevToolsEndp
             debugging_session_required=True,
         )
 
-    lines = [
-        line.strip()
-        for line in active_port_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    port = int(lines[0])
-    browser_path = lines[1]
+    try:
+        lines = [
+            line.strip()
+            for line in active_port_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if len(lines) < 2:
+            raise ValueError("missing port or websocket path")
+
+        port = int(lines[0])
+        browser_path = lines[1]
+        if not browser_path.startswith("/"):
+            raise ValueError("invalid websocket path")
+    except ValueError as exc:
+        raise BrowserCookieRefreshError(
+            "专用 Chrome profile 的远程调试会话信息无效，请重新按指引启动带 remote debugging 的 Chrome。",
+            manual_login_required=True,
+            debugging_session_required=True,
+        ) from exc
+
     return DevToolsEndpoint(
         port=port,
         browser_websocket_url=f"ws://127.0.0.1:{port}{browser_path}",
