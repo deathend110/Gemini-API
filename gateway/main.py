@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -40,11 +38,6 @@ def resolve_startup_account_mode(app: FastAPI) -> str:
         return "unavailable"
 
     try:
-        asyncio.run(service.warmup())
-    except Exception:
-        return "unavailable"
-
-    try:
         snapshot = service.get_account_snapshot()
     except Exception:
         return "unavailable"
@@ -64,6 +57,7 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await app.state.gateway_service.warmup()
+        print(f"Account mode: {resolve_startup_account_mode(app)}")
         try:
             yield
         finally:
@@ -167,7 +161,6 @@ def main() -> None:
     print(f"API Key: {settings.api_key}")
     print(f"Default model: {settings.default_model}")
     print(f"Default reasoning effort: {settings.default_reasoning_effort}")
-    print(f"Account mode: {resolve_startup_account_mode(app)}")
     uvicorn.run(
         app,
         host=settings.host,

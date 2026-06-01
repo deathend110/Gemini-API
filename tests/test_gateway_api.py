@@ -443,15 +443,61 @@ class TestGatewayApi(unittest.TestCase):
         self.assertIn("call_123", prompt)
         self.assertIn("晴天 28 度", prompt)
 
-    def test_main_prints_startup_summary(self) -> None:
+    def test_lifespan_prints_startup_summary_after_warmup(self) -> None:
         stdout = io.StringIO()
         snapshot = SimpleNamespace(mode="degraded")
+        warmup_mock = AsyncMock()
+        shutdown_mock = AsyncMock()
+
+        with (
+            patch.object(self.app.state.gateway_service, "warmup", warmup_mock),
+            patch.object(self.app.state.gateway_service, "shutdown", shutdown_mock),
+            patch.object(
+                self.app.state.gateway_service,
+                "get_account_snapshot",
+                return_value=snapshot,
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            with TestClient(self.app):
+                pass
+
+        output = stdout.getvalue()
+        self.assertIn("Account mode: degraded", output)
+        warmup_mock.assert_awaited_once()
+        shutdown_mock.assert_awaited_once()
+
+    def test_lifespan_startup_summary_ignores_account_snapshot_errors(self) -> None:
+        stdout = io.StringIO()
+        warmup_mock = AsyncMock()
+        shutdown_mock = AsyncMock()
+
+        with (
+            patch.object(self.app.state.gateway_service, "warmup", warmup_mock),
+            patch.object(self.app.state.gateway_service, "shutdown", shutdown_mock),
+            patch.object(
+                self.app.state.gateway_service,
+                "get_account_snapshot",
+                side_effect=RuntimeError("boom"),
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            with TestClient(self.app):
+                pass
+
+        output = stdout.getvalue()
+        self.assertIn("Account mode: unavailable", output)
+        warmup_mock.assert_awaited_once()
+        shutdown_mock.assert_awaited_once()
+
+    def test_main_prints_base_configuration_without_triggering_warmup(self) -> None:
+        stdout = io.StringIO()
         warmup_mock = AsyncMock()
         app = SimpleNamespace(
             state=SimpleNamespace(
                 gateway_service=SimpleNamespace(
                     warmup=warmup_mock,
-                    get_account_snapshot=lambda: snapshot,
+                    get_account_snapshot=unittest.mock.Mock(return_value=SimpleNamespace(mode="degraded")),
                 )
             )
         )
@@ -467,35 +513,8 @@ class TestGatewayApi(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Base URL: http://127.0.0.1:8010/v1", output)
         self.assertIn("API Key: demo-key", output)
-        self.assertIn("Account mode: degraded", output)
-        warmup_mock.assert_awaited_once()
-        run_mock.assert_called_once()
-
-    def test_main_startup_summary_ignores_account_snapshot_errors(self) -> None:
-        stdout = io.StringIO()
-        warmup_mock = AsyncMock()
-        app = SimpleNamespace(
-            state=SimpleNamespace(
-                gateway_service=SimpleNamespace(
-                    warmup=warmup_mock,
-                    get_account_snapshot=unittest.mock.Mock(
-                        side_effect=RuntimeError("boom")
-                    ),
-                )
-            )
-        )
-
-        with (
-            patch("gateway.main.GatewaySettings", return_value=GatewaySettings(api_key="demo-key")),
-            patch("gateway.main.create_app", return_value=app),
-            patch("uvicorn.run") as run_mock,
-            contextlib.redirect_stdout(stdout),
-        ):
-            main()
-
-        output = stdout.getvalue()
-        self.assertIn("Account mode: unavailable", output)
-        warmup_mock.assert_awaited_once()
+        self.assertNotIn("Account mode:", output)
+        warmup_mock.assert_not_awaited()
         run_mock.assert_called_once_with(
             app,
             host="127.0.0.1",
