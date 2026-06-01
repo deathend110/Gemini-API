@@ -417,6 +417,10 @@ class GeminiClient(ChatMixin, GemMixin, ResearchMixin):
                     logger.info(
                         f"Account status: {self.account_status.name} - {self.account_status.description}"
                     )
+            elif self.account_status == AccountStatus.SESSION_UNVERIFIED:
+                logger.info(
+                    f"Account status: {self.account_status.name} - {self.account_status.description}"
+                )
             else:
                 logger.warning(
                     f"Account status: {self.account_status.name} - {self.account_status.description}"
@@ -454,11 +458,6 @@ class GeminiClient(ChatMixin, GemMixin, ResearchMixin):
                         description = get_nested_value(model_data, [2], "")
 
                         if model_id and display_name:
-                            is_model_available = True
-                            if self.account_status == AccountStatus.UNAUTHENTICATED:
-                                if model_id != Model.BASIC_FLASH.model_id:
-                                    is_model_available = False
-
                             model = AvailableModel(
                                 model_id=model_id,
                                 model_name=id_name_mapping.get(model_id, ""),
@@ -466,7 +465,7 @@ class GeminiClient(ChatMixin, GemMixin, ResearchMixin):
                                 description=description,
                                 capacity=capacity,
                                 capacity_field=capacity_field,
-                                is_available=is_model_available,
+                                is_available=True,
                             )
                             self._model_registry[model_id] = model
 

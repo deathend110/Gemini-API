@@ -49,7 +49,7 @@ class TestGatewayAccountStatus(unittest.TestCase):
 
     def test_chat_only_maps_to_degraded(self) -> None:
         snapshot = GatewayAccountSnapshot(
-            raw_account_status="UNAUTHENTICATED",
+            raw_account_status="SESSION_UNVERIFIED",
             raw_account_status_code=1016,
             chat_available=True,
             advanced_models_available=False,
@@ -65,7 +65,7 @@ class TestGatewayAccountStatus(unittest.TestCase):
 
     def test_required_full_web_raises_when_not_satisfied(self) -> None:
         snapshot = GatewayAccountSnapshot(
-            raw_account_status="UNAUTHENTICATED",
+            raw_account_status="SESSION_UNVERIFIED",
             raw_account_status_code=1016,
             chat_available=True,
             advanced_models_available=True,

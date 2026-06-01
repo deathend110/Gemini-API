@@ -339,7 +339,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
                     "rejected_probes": ["caps"],
                 }
             },
-            account_status_name="UNAUTHENTICATED",
+            account_status_name="SESSION_UNVERIFIED",
             account_status_code=1016,
         )
         service._build_client_from_cached_cookies = Mock(return_value=fake_client)
@@ -349,7 +349,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         snapshot = service.get_account_snapshot()
         self.assertIsNotNone(snapshot)
         self.assertEqual(snapshot.mode, "degraded")
-        self.assertEqual(snapshot.raw_account_status, "UNAUTHENTICATED")
+        self.assertEqual(snapshot.raw_account_status, "SESSION_UNVERIFIED")
         self.assertEqual(snapshot.raw_account_status_code, 1016)
         self.assertTrue(snapshot.chat_available)
         self.assertFalse(snapshot.deep_research_available)
@@ -371,7 +371,7 @@ class TestGatewayServiceLifecycle(unittest.IsolatedAsyncioTestCase):
                     "rejected_probes": ["caps"],
                 }
             },
-            account_status_name="UNAUTHENTICATED",
+            account_status_name="SESSION_UNVERIFIED",
             account_status_code=1016,
         )
         service._build_client_from_cached_cookies = Mock(return_value=fake_client)

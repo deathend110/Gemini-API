@@ -203,9 +203,9 @@ class AccountStatus(IntEnum):
         "Access is restricted, possibly due to regional or temporary session issues.",
     )
 
-    UNAUTHENTICATED = (
+    SESSION_UNVERIFIED = (
         1016,
-        "Session is not authenticated or cookies have expired. Please check your cookies.",
+        "Session initialized, but GetUserStatus reported a limited or unverified account state.",
     )
 
     ACCOUNT_REJECTED = (
