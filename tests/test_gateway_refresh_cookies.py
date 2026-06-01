@@ -255,6 +255,26 @@ class TestGatewayRefreshCookies(unittest.TestCase):
 
         self.assertTrue(ctx.exception.manual_login_required)
 
+    def test_load_browser_cookies_from_profile_reports_profile_in_use_on_permission_error(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            BrowserCookieRefreshError,
+            "专用 Chrome profile 当前仍在运行",
+        ) as ctx:
+            load_browser_cookies_from_profile(
+                profile_dir=Path(r"C:\Users\27355\.gemini-api\selenium-profile"),
+                browser_loader=lambda **kwargs: (_ for _ in ()).throw(
+                    PermissionError(
+                        "[Errno 13] Permission denied: "
+                        "'C:\\Users\\27355\\.gemini-api\\selenium-profile\\Default\\Network\\Cookies'"
+                    )
+                ),
+            )
+
+        self.assertTrue(ctx.exception.profile_in_use)
+        self.assertFalse(ctx.exception.manual_login_required)
+
     def test_main_prints_manual_login_guidance_when_profile_not_logged_in(
         self,
     ) -> None:
@@ -289,6 +309,32 @@ class TestGatewayRefreshCookies(unittest.TestCase):
             '--user-data-dir="C:\\Users\\27355\\.gemini-api\\selenium-profile"',
             stdout.getvalue(),
         )
+
+    def test_main_prints_close_browser_guidance_when_profile_cookie_db_is_locked(
+        self,
+    ) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with (
+            patch(
+                "gateway.refresh_cookies.refresh_browser_cookies_to_file",
+                side_effect=BrowserCookieRefreshError(
+                    "专用 Chrome profile 当前仍在运行，无法读取 Cookies 数据库。"
+                    "请先关闭该 profile 的 Chrome 窗口后再重新执行。",
+                    profile_in_use=True,
+                ),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                ["--profile-dir", r"C:\Users\27355\.gemini-api\selenium-profile"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("专用 Chrome profile 当前仍在运行", stderr.getvalue())
+        self.assertIn("请先关闭该 profile 的 Chrome 窗口", stdout.getvalue())
 
 
 if __name__ == "__main__":

@@ -15,9 +15,16 @@ DEFAULT_BROWSER_SOURCE = "manual-chrome-profile"
 
 
 class BrowserCookieRefreshError(Exception):
-    def __init__(self, message: str, *, manual_login_required: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        manual_login_required: bool = False,
+        profile_in_use: bool = False,
+    ) -> None:
         super().__init__(message)
         self.manual_login_required = manual_login_required
+        self.profile_in_use = profile_in_use
 
 
 @dataclass(frozen=True)
@@ -153,6 +160,12 @@ def load_browser_cookies_from_profile(
             domain_name=domain_name,
             key_file=str(key_file),
         )
+    except PermissionError as exc:
+        raise BrowserCookieRefreshError(
+            "专用 Chrome profile 当前仍在运行，无法读取 Cookies 数据库。"
+            "请先关闭该 profile 的 Chrome 窗口后再重新执行。",
+            profile_in_use=True,
+        ) from exc
     except BrowserCookieRefreshError:
         raise
     except Exception as exc:
@@ -193,6 +206,13 @@ def print_manual_login_guidance(
     print("")
     print("请复制上面的 PowerShell 命令并手动运行。")
     print("在打开的专用 Chrome 中完成 Gemini 登录后，再重新执行：")
+    print("uv run --extra browser python -m gateway.refresh_cookies")
+
+
+def print_profile_in_use_guidance(*, profile_dir: str | Path) -> None:
+    print("专用 Chrome profile 当前仍在运行，暂时无法直接读取 Cookies 数据库。")
+    print(f"请先关闭该 profile 的 Chrome 窗口：{Path(profile_dir)}")
+    print("关闭后重新执行：")
     print("uv run --extra browser python -m gateway.refresh_cookies")
 
 
@@ -286,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     except BrowserCookieRefreshError as exc:
         if exc.manual_login_required:
             print_manual_login_guidance(profile_dir=profile_dir, url=args.url)
+        elif exc.profile_in_use:
+            print_profile_in_use_guidance(profile_dir=profile_dir)
         print(str(exc), file=sys.stderr)
         return 1
     return 0
