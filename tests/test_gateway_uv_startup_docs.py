@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import subprocess
+import tempfile
 import unittest
 
 
@@ -6,6 +9,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestGatewayUvStartupDocs(unittest.TestCase):
+    def _run_start_gateway_cookie_probe(self, payload: object) -> str:
+        script_path = ROOT / "gateway" / "start_gateway.ps1"
+        script_text = script_path.read_text(encoding="utf-8")
+        start_index = script_text.find("function Get-GatewayCookieValue")
+        end_index = script_text.find(
+            "# If refresh_cookies reports that manual login is required"
+        )
+        bootstrap = (
+            script_text[start_index:end_index]
+            if start_index != -1 and end_index != -1
+            else ""
+        )
+        self.assertTrue(bootstrap, "expected function definitions before runtime block")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookies_path = Path(temp_dir) / "cookies.json"
+            cookies_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            command = (
+                "$ErrorActionPreference = 'Stop';\n"
+                f"{bootstrap}\n"
+                f"$result = Test-GatewayCookiesJsonUsable -Path '{cookies_path}';\n"
+                "if ($result) { 'true' } else { 'false' }\n"
+            )
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        return completed.stdout.strip()
+
     def test_gateway_env_script_points_to_uv_run_startup(self) -> None:
         script = (ROOT / "gateway" / "set_gateway_env.ps1").read_text(
             encoding="utf-8"
@@ -108,6 +146,30 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
         )
         self.assertIn("uv run python -m gateway.main", script)
         self.assertIn("缺少可用 cookies.json", script)
+
+    def test_start_gateway_cookie_probe_accepts_object_wrapped_cookie_list(
+        self,
+    ) -> None:
+        result = self._run_start_gateway_cookie_probe(
+            {
+                "cookies": [
+                    {"name": "__Secure-1PSID", "value": "list-psid"},
+                    {"name": "__Secure-1PSIDTS", "value": "list-psidts"},
+                ]
+            }
+        )
+
+        self.assertEqual(result, "true")
+
+    def test_start_gateway_cookie_probe_accepts_top_level_cookie_list(self) -> None:
+        result = self._run_start_gateway_cookie_probe(
+            [
+                {"name": "__Secure-1PSID", "value": "list-psid"},
+                {"name": "__Secure-1PSIDTS", "value": "list-psidts"},
+            ]
+        )
+
+        self.assertEqual(result, "true")
 
 
 if __name__ == "__main__":

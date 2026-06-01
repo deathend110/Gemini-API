@@ -34,6 +34,25 @@ function Get-GatewayCookieValue {
         return $CookieData[$Name]
     }
 
+    if (
+        $CookieData -is [System.Collections.IEnumerable] -and
+        -not ($CookieData -is [string])
+    ) {
+        foreach ($item in $CookieData) {
+            if ($null -eq $item) {
+                continue
+            }
+
+            $itemName = Get-GatewayCookieValue -CookieData $item -Name "name"
+            if ($itemName -ne $Name) {
+                continue
+            }
+
+            return Get-GatewayCookieValue -CookieData $item -Name "value"
+        }
+        return $null
+    }
+
     $property = $CookieData.PSObject.Properties[$Name]
     if ($null -ne $property) {
         return $property.Value
