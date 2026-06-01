@@ -10,6 +10,7 @@ from gateway.config import GatewaySettings
 from gateway.refresh_cookies import (
     BrowserCookieRefreshError,
     choose_cookie_source,
+    load_browser_cookies_from_domain,
     refresh_browser_cookies_to_file,
 )
 from gateway.service import GatewayService
@@ -188,6 +189,53 @@ class TestGatewayRefreshCookies(unittest.TestCase):
                 ],
                 "old-psid",
             )
+
+    def test_load_browser_cookies_from_domain_surfaces_browser_errors(self) -> None:
+        fake_module = type(
+            "FakeModule",
+            (),
+            {
+                "HAS_BC3": True,
+                "load_browser_cookies": staticmethod(lambda **kwargs: {}),
+            },
+        )
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "gemini_webapi.utils.load_browser_cookies": fake_module,
+                "gemini_webapi.utils": fake_module,
+            },
+        ):
+            with self.assertRaisesRegex(
+                BrowserCookieRefreshError,
+                "No browser cookies were found",
+            ):
+                load_browser_cookies_from_domain(".google.com", verbose=False)
+
+    def test_refresh_browser_cookies_reports_failure_details_in_verbose_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cookies_path = Path(temp_dir) / "cookies.json"
+            stderr = StringIO()
+
+            with (
+                patch(
+                    "gateway.refresh_cookies.load_browser_cookies_from_domain",
+                    side_effect=BrowserCookieRefreshError(
+                        "No browser cookies were found. Browser diagnostics: edge=RequiresAdminError: denied; chrome=RequiresAdminError: denied"
+                    ),
+                ),
+                redirect_stdout(StringIO()),
+                patch("sys.stderr", stderr),
+            ):
+                from gateway.refresh_cookies import main
+
+                exit_code = main(
+                    ["--cookies-path", str(cookies_path), "--domain", ".google.com"]
+                )
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Browser diagnostics:", stderr.getvalue())
 
 
 if __name__ == "__main__":

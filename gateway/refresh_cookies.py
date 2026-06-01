@@ -50,6 +50,38 @@ class BrowserCookieSelection:
         )
 
 
+def _collect_browser_cookie_diagnostics(domain_name: str) -> list[str]:
+    try:
+        import browser_cookie3 as bc3
+    except ImportError:
+        return []
+
+    browser_names = [
+        "edge",
+        "chrome",
+        "chromium",
+        "brave",
+        "vivaldi",
+        "opera",
+        "opera_gx",
+        "firefox",
+        "librewolf",
+        "safari",
+    ]
+    diagnostics: list[str] = []
+    for browser_name in browser_names:
+        cookie_fn = getattr(bc3, browser_name, None)
+        if cookie_fn is None:
+            continue
+        try:
+            jar = cookie_fn(domain_name=domain_name)
+            count = len(list(jar))
+            diagnostics.append(f"{browser_name}=ok:{count}")
+        except Exception as exc:
+            diagnostics.append(f"{browser_name}={type(exc).__name__}: {exc}")
+    return diagnostics
+
+
 def _cookies_from_items(items: list[dict[str, Any]]) -> dict[str, str]:
     cookies: dict[str, str] = {}
     for item in items:
@@ -121,8 +153,13 @@ def load_browser_cookies_from_domain(
 
     cookies = load_browser_cookies(domain_name=domain_name, verbose=verbose)
     if not cookies:
+        diagnostics = _collect_browser_cookie_diagnostics(domain_name)
+        diagnostics_suffix = ""
+        if diagnostics:
+            diagnostics_suffix = " Browser diagnostics: " + "; ".join(diagnostics)
         raise BrowserCookieRefreshError(
             "No browser cookies were found. Please log in to https://gemini.google.com in your browser first."
+            + diagnostics_suffix
         )
     return cookies
 
