@@ -90,6 +90,22 @@ function Test-GatewayCookiesJsonUsable {
     return ($psid -is [string]) -and (-not [string]::IsNullOrWhiteSpace($psid))
 }
 
+function Invoke-GatewayNativeCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Command,
+
+        [Parameter(Mandatory = $true)]
+        [string]$FailureMessage
+    )
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "$FailureMessage (exit code: $LASTEXITCODE)"
+        exit $LASTEXITCODE
+    }
+}
+
 # If refresh_cookies reports that manual login is required, copy the printed
 # PowerShell command. If the same profile was opened normally, close that
 # Chrome window first, then relaunch with the printed command. After sign-in,
@@ -115,15 +131,15 @@ $ErrorActionPreference = "Stop"
   -BrowserPageLoadTimeoutSeconds $BrowserPageLoadTimeoutSeconds `
   -BrowserHeadless $BrowserHeadless
 
-uv sync
+Invoke-GatewayNativeCommand -Command { uv sync } -FailureMessage "uv sync failed"
 
 if (Test-GatewayCookiesJsonUsable -Path $CookiesJsonPath) {
     Write-Host "Detected usable cookies.json at $CookiesJsonPath; 跳过 refresh_cookies，直接启动网关。"
 }
 else {
     Write-Host "缺少可用 cookies.json，先尝试从专用 Chrome profile 刷新登录态。"
-    uv sync --extra browser
-    uv run --extra browser python -m gateway.refresh_cookies
+    Invoke-GatewayNativeCommand -Command { uv sync --extra browser } -FailureMessage "uv sync --extra browser failed"
+    Invoke-GatewayNativeCommand -Command { uv run --extra browser python -m gateway.refresh_cookies } -FailureMessage "gateway.refresh_cookies failed"
 }
 
-uv run python -m gateway.main
+Invoke-GatewayNativeCommand -Command { uv run python -m gateway.main } -FailureMessage "gateway.main failed"

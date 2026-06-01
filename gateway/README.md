@@ -75,6 +75,7 @@ uv run python -m gateway.main
 
 - 如已有可用 `cookies.json`（至少包含 `__Secure-1PSID`），直接启动网关，不强制先做 live refresh
 - 缺少可用 `cookies.json` 时，才会自动进入 `gateway.refresh_cookies` 流程
+- 如果 `gateway.refresh_cookies` 返回非零退出码，一键脚本会立即停止，不会继续启动网关
 - 如果只是想主动刷新登录态，也可以跳过一键脚本，单独执行 `gateway.refresh_cookies`
 
 启动后终端会输出：

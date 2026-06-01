@@ -9,18 +9,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestGatewayUvStartupDocs(unittest.TestCase):
-    def _run_start_gateway_cookie_probe(self, payload: object) -> str:
+    def _load_start_gateway_bootstrap(self) -> str:
         script_path = ROOT / "gateway" / "start_gateway.ps1"
         script_text = script_path.read_text(encoding="utf-8")
         start_index = script_text.find("function Get-GatewayCookieValue")
         end_index = script_text.find(
             "# If refresh_cookies reports that manual login is required"
         )
-        bootstrap = (
+        return (
             script_text[start_index:end_index]
             if start_index != -1 and end_index != -1
             else ""
         )
+
+    def _run_start_gateway_bootstrap_command(
+        self, command: str
+    ) -> subprocess.CompletedProcess[str]:
+        bootstrap = self._load_start_gateway_bootstrap()
+        self.assertTrue(bootstrap, "expected function definitions before runtime block")
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-Command", f"{bootstrap}\n{command}\n"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def _run_start_gateway_cookie_probe(self, payload: object) -> str:
+        bootstrap = self._load_start_gateway_bootstrap()
         self.assertTrue(bootstrap, "expected function definitions before runtime block")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -90,6 +105,7 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
         self.assertIn("直接启动网关", readme)
         self.assertIn("缺少可用 `cookies.json`", readme)
         self.assertIn("再按手动 profile 流程刷新", readme)
+        self.assertIn("不会继续启动网关", readme)
 
     def test_gateway_readme_marks_browser_wait_settings_as_compatibility_only(
         self,
@@ -146,6 +162,17 @@ class TestGatewayUvStartupDocs(unittest.TestCase):
         )
         self.assertIn("uv run python -m gateway.main", script)
         self.assertIn("缺少可用 cookies.json", script)
+        self.assertIn("Invoke-GatewayNativeCommand", script)
+        self.assertIn("$LASTEXITCODE", script)
+
+    def test_start_gateway_native_command_wrapper_stops_on_nonzero_exit(self) -> None:
+        completed = self._run_start_gateway_bootstrap_command(
+            "Invoke-GatewayNativeCommand -Command { cmd /c exit 7 } -FailureMessage 'refresh failed'; 'unreachable'"
+        )
+
+        self.assertEqual(completed.returncode, 7)
+        self.assertIn("refresh failed", completed.stderr)
+        self.assertNotIn("unreachable", completed.stdout)
 
     def test_start_gateway_cookie_probe_accepts_object_wrapped_cookie_list(
         self,
